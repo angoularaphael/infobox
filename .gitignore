@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.env
+data/settings.json
+.venv/
+venv/
+*.html
+!fixtures/*.html
+probe_html.py
+fetch_once.py
+sample_page.html

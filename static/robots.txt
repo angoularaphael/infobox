@@ -1,0 +1,6 @@
+User-agent: *
+Disallow: /api/
+Disallow: /data/
+Allow: /assistant
+Allow: /static/css/
+Allow: /install-favori

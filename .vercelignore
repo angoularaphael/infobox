@@ -1,0 +1,11 @@
+.env
+.venv
+venv
+__pycache__
+*.pyc
+data/
+probe_html.py
+fetch_once.py
+sample_page.html
+fixtures/
+test_parser.py
