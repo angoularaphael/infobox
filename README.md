@@ -75,7 +75,9 @@ Le site **Assistant + favori** est prêt pour Vercel. La collecte BoxRec reste d
 3. Déployez. Ouvrez `https://votre-projet.vercel.app/assistant`.
 4. **Réinstallez le favori** après déploiement (le lien doit pointer vers Vercel, plus `127.0.0.1`).
 
-Fichiers ajoutés : `vercel.json`, `api/index.py`, `runtime.txt`.
+Fichiers de déploiement : `vercel.json` (rewrites + `includeFiles`), `api/index.py`, `app.py`, `runtime.txt`, `pyproject.toml` (`tool.vercel.entrypoint`).
+
+**Important** : n’utilisez pas la clé dépréciée `builds` dans `vercel.json` — elle exclut `static/` du déploiement et provoque un 404 sur `/assistant`.
 
 **Sécurité** : en-têtes CSP, anti-bots, limite de débit, `robots.txt`, CORS limité à boxrec.com + votre domaine. Les routes `/api/scrape` etc. exigent `INFOBOX_API_KEY` si elle est définie.
 
