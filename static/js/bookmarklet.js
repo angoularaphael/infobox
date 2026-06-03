@@ -56,16 +56,29 @@ function rowLabelName(tr) {
   return (b ? b.textContent : cell.textContent).trim().toLowerCase().replace(/:$/, "");
 }
 
-function rowValueCell(tr) {
-  const labelCell = tr.querySelector("td.rowLabel, th.rowLabel, th");
-  if (!labelCell) return null;
-  let valueCell = labelCell.nextElementSibling;
-  if (valueCell && valueCell.tagName !== "TD") valueCell = null;
-  if (!valueCell) {
-    const tds = tr.querySelectorAll("td");
-    if (tds.length >= 2) valueCell = tds[tds.length - 1];
+/** Toutes les cellules valeur (ignore rowLabel ; gère drapeau + texte sur 2+ colonnes). */
+function rowValueCells(tr) {
+  const labelCell = tr.querySelector("td.rowLabel, th.rowLabel");
+  let cells = [...tr.querySelectorAll("td")].filter(
+    (td) => !td.classList.contains("rowLabel") && td !== labelCell
+  );
+  if (!cells.length) {
+    const th = tr.querySelector("th");
+    const td = tr.querySelector("td");
+    if (th && td && th !== labelCell) cells = [td];
   }
-  return valueCell;
+  if (!cells.length) {
+    const tds = [...tr.querySelectorAll("td")];
+    if (tds.length >= 2) cells = [tds[tds.length - 1]];
+  }
+  return cells;
+}
+
+function rowValueText(cells) {
+  return cells
+    .map((c) => c.textContent.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(" ");
 }
 
 function labelMatches(label, keys) {
@@ -83,7 +96,11 @@ function findProfileSections(doc) {
     if (h1) {
       let node = h1.parentElement;
       for (let n = 0; n < 16 && node; n++) {
-        if (node.querySelector("tr td.rowLabel, tr.drawRowBorder")) {
+        if (
+          node.querySelector(
+            "tr td.rowLabel, tr.drawRowBorder, tr th, a[href^='mailto:'], [data-cfemail]"
+          )
+        ) {
           sections.push(node);
           break;
         }
@@ -91,7 +108,44 @@ function findProfileSections(doc) {
       }
     }
   }
+  if (!sections.length && doc.body) sections.push(doc.body);
   return sections;
+}
+
+function profileContentScope(doc) {
+  const h1 = doc.querySelector("h1");
+  if (!h1) return doc.body || doc;
+  let node = h1.parentElement;
+  for (let n = 0; n < 20 && node; n++) {
+    if (
+      node.querySelector(
+        "[data-cfemail], a[href^='mailto:'], td.rowLabel, tr.drawRowBorder"
+      )
+    ) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return doc.body || doc;
+}
+
+function scanProfileContactsGlobally(doc, target) {
+  const emails = new Set();
+  const phones = new Set();
+  const scope = profileContentScope(doc);
+  if (!scope) return;
+  scope.querySelectorAll("[data-cfemail]").forEach((el) => {
+    const e = decodeCfEmail(el.getAttribute("data-cfemail"));
+    if (isValidContactEmail(e)) emails.add(e);
+  });
+  scope.querySelectorAll('a[href^="mailto:"]').forEach((a) => {
+    const e = a.getAttribute("href").replace(/^mailto:/i, "").split("?")[0].trim();
+    if (isValidContactEmail(e)) emails.add(e);
+  });
+  scope.querySelectorAll('a[href^="tel:"]').forEach((a) => {
+    addPhonesFromText(a.getAttribute("href").replace(/^tel:/i, ""), phones);
+  });
+  mergeContactFields(target, emails, phones, []);
 }
 
 function mergeContactFields(target, emails, phones, addressParts) {
@@ -116,28 +170,32 @@ function extractProfileDetails(root, target) {
   const addressParts = [];
 
   root.querySelectorAll("tr").forEach((tr) => {
-    const valueCell = rowValueCell(tr);
-    if (!valueCell) return;
+    const valueCells = rowValueCells(tr);
+    if (!valueCells.length) return;
     const label = rowLabelName(tr);
-    const val = valueCell.textContent.replace(/\s+/g, " ").trim();
+    const val = rowValueText(valueCells);
 
     if (labelMatches(label, EMAIL_LABELS)) {
-      valueCell.querySelectorAll("[data-cfemail]").forEach((el) => {
-        const e = decodeCfEmail(el.getAttribute("data-cfemail"));
-        if (isValidContactEmail(e)) emails.add(e);
+      valueCells.forEach((cell) => {
+        cell.querySelectorAll("[data-cfemail]").forEach((el) => {
+          const e = decodeCfEmail(el.getAttribute("data-cfemail"));
+          if (isValidContactEmail(e)) emails.add(e);
+        });
+        cell.querySelectorAll('a[href^="mailto:"]').forEach((a) => {
+          const e = a.getAttribute("href").replace(/^mailto:/i, "").split("?")[0].trim();
+          if (isValidContactEmail(e)) emails.add(e);
+        });
       });
       const m = val.match(EMAIL_RE);
       if (m && isValidContactEmail(m[0])) emails.add(m[0]);
-      valueCell.querySelectorAll('a[href^="mailto:"]').forEach((a) => {
-        const e = a.getAttribute("href").replace(/^mailto:/i, "").split("?")[0].trim();
-        if (isValidContactEmail(e)) emails.add(e);
-      });
     }
 
     if (labelMatches(label, PHONE_LABELS)) {
       addPhonesFromText(val, phones);
-      valueCell.querySelectorAll('a[href^="tel:"]').forEach((a) => {
-        addPhonesFromText(a.getAttribute("href").replace(/^tel:/i, ""), phones);
+      valueCells.forEach((cell) => {
+        cell.querySelectorAll('a[href^="tel:"]').forEach((a) => {
+          addPhonesFromText(a.getAttribute("href").replace(/^tel:/i, ""), phones);
+        });
       });
     }
 
@@ -151,15 +209,19 @@ function extractProfileDetails(root, target) {
 function extractProfileDetailsFallback(html, target) {
   const chunk = html.split(/<h2[\s>]/i)[0] || html;
   const rowRe =
-    /<tr[^>]*>[\s\S]*?<(?:td|th)[^>]*\browLabel\b[^>]*>[\s\S]*?<b>\s*([^<]+?)\s*<\/b>[\s\S]*?<\/(?:td|th)>\s*<td[^>]*>([\s\S]*?)<\/td>/gi;
+    /<tr[^>]*>[\s\S]*?<(?:td|th)[^>]*\browLabel\b[^>]*>[\s\S]*?<b>\s*([^<]+?)\s*<\/b>[\s\S]*?<\/(?:td|th)>((?:\s*<td[^>]*>[\s\S]*?<\/td>)+)/gi;
   let m;
   const emails = new Set();
   const phones = new Set();
   const addressParts = [];
   while ((m = rowRe.exec(chunk))) {
     const label = m[1].trim().toLowerCase().replace(/:$/, "");
-    const cellHtml = m[2];
-    const cellText = cellHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    const cellsHtml = m[2];
+    const cellText = cellsHtml
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const cellHtml = cellsHtml;
     if (labelMatches(label, EMAIL_LABELS)) {
       const cf = cellHtml.match(/data-cfemail=["']([a-f0-9]+)["']/i);
       if (cf) {
@@ -254,18 +316,30 @@ function isLoginHtml(html) {
   );
 }
 
-function extractContactsFromHtml(html, person) {
-  if (isLoginHtml(html)) return false;
-  const found = { email: "", phone: "", address: "" };
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  findProfileSections(doc).forEach((root) => extractProfileDetails(root, found));
-  extractProfileDetailsFallback(html, found);
+function applyContactFieldsToPerson(person, found) {
   if (found.email) person.email = found.email;
   if (found.phone) person.phone = found.phone;
   if (found.address) {
     person.address = found.address;
     if (!person.location || person.location.length < 2) person.location = found.address;
   }
+}
+
+function extractContactsFromDocument(doc) {
+  const found = { email: "", phone: "", address: "" };
+  findProfileSections(doc).forEach((root) => extractProfileDetails(root, found));
+  scanProfileContactsGlobally(doc, found);
+  return found;
+}
+
+function extractContactsFromHtml(html, person) {
+  if (isLoginHtml(html)) return false;
+  const found = { email: "", phone: "", address: "" };
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const parsed = extractContactsFromDocument(doc);
+  Object.assign(found, parsed);
+  extractProfileDetailsFallback(html, found);
+  applyContactFieldsToPerson(person, found);
   return !!(found.email || found.phone);
 }
 
@@ -276,6 +350,7 @@ async function fetchProfileHtml(url) {
     headers: {
       Accept: "text/html,application/xhtml+xml",
       "Accept-Language": "en-GB,en;q=0.9,fr;q=0.8",
+      Referer: location.href,
     },
   };
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -298,10 +373,57 @@ async function fetchProfileHtml(url) {
   return null;
 }
 
-async function enrichOneProfile(person) {
+function enrichPersonFromDocument(doc, person) {
+  const found = extractContactsFromDocument(doc);
+  applyContactFieldsToPerson(person, found);
+  return !!(found.email || found.phone);
+}
+
+function enrichOneProfileIframe(person) {
+  return new Promise((resolve) => {
+    if (!person.profile_url) {
+      resolve(false);
+      return;
+    }
+    const iframe = document.createElement("iframe");
+    iframe.style.cssText =
+      "position:fixed;left:-9999px;top:0;width:900px;height:700px;visibility:hidden;border:0";
+    iframe.setAttribute("aria-hidden", "true");
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      iframe.remove();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), 14000);
+    iframe.onload = () => {
+      setTimeout(() => {
+        try {
+          const doc = iframe.contentDocument;
+          if (doc && enrichPersonFromDocument(doc, person)) finish(true);
+          else finish(false);
+        } catch (_) {
+          finish(false);
+        }
+      }, 700);
+    };
+    iframe.onerror = () => finish(false);
+    iframe.src = person.profile_url;
+    document.body.appendChild(iframe);
+  });
+}
+
+async function enrichOneProfile(person, { useIframe = false } = {}) {
   if (!person.profile_url) return;
-  const html = await fetchProfileHtml(person.profile_url);
-  if (html) extractContactsFromHtml(html, person);
+  if (!useIframe) {
+    const html = await fetchProfileHtml(person.profile_url);
+    if (html) extractContactsFromHtml(html, person);
+  }
+  if (useIframe || (!person.email && !person.phone)) {
+    await enrichOneProfileIframe(person);
+  }
 }
 
 function listColumnIndex(headers, name) {
@@ -333,14 +455,22 @@ function extractListFromDoc(doc, role, searchCountry) {
     let location = "";
     if (locIdx >= 0 && tds[locIdx]) location = tds[locIdx].textContent.trim();
     else if (tds.length >= 2) location = tds[1].textContent.trim();
+    let email = "";
+    let phone = "";
+    const mail = tr.querySelector('a[href^="mailto:"]');
+    if (mail) {
+      email = mail.getAttribute("href").replace(/^mailto:/i, "").split("?")[0].trim();
+    }
+    const tel = tr.querySelector('a[href^="tel:"]');
+    if (tel) phone = tel.getAttribute("href").replace(/^tel:/i, "").trim();
     people.push({
       name: link.textContent.trim(),
       profile_url: full,
       location,
       search_country: searchCountry || "",
       address: "",
-      email: "",
-      phone: "",
+      email,
+      phone,
       role,
     });
   });
@@ -550,7 +680,7 @@ async function enrichAllProfiles(people) {
         `${p.name || "Contact"} — e-mails et téléphones…`
       );
       document.title = `InfoBox ${i + 1}/${people.length}`;
-      await enrichOneProfile(p);
+      await enrichOneProfile(p, { useIframe: false });
       if (i < people.length - 1 && !(await waitCancellable(PROFILE_FETCH_DELAY_MS))) break;
     }
   }
@@ -571,8 +701,8 @@ async function enrichAllProfiles(people) {
         `Reprise ${i + 1} / ${incomplete.length}`,
         p.name || "Contact"
       );
-      await enrichOneProfile(p);
-      if (i < incomplete.length - 1 && !(await waitCancellable(PROFILE_RETRY_DELAY_MS))) break;
+      await enrichOneProfile(p, { useIframe: true });
+      if (i < incomplete.length - 1 && !(await waitCancellable(PROFILE_RETRY_DELAY_MS + 400))) break;
     }
   }
 }

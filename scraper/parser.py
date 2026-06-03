@@ -131,10 +131,45 @@ def _find_profile_sections(soup: BeautifulSoup) -> list[Any]:
         for _ in range(16):
             if node is None:
                 break
-            if node.select_one("tr td.rowLabel, tr.drawRowBorder"):
+            if node.select_one(
+                "tr td.rowLabel, tr.drawRowBorder, tr th, a[href^='mailto:'], [data-cfemail]"
+            ):
                 return [node]
             node = node.parent
     return [soup.body] if soup.body else [soup]
+
+
+def _profile_content_scope(soup: BeautifulSoup):
+    h1 = soup.select_one("h1")
+    if not h1:
+        return soup.body or soup
+    node = h1.parent
+    for _ in range(20):
+        if node is None:
+            break
+        if node.select_one(
+            "[data-cfemail], a[href^='mailto:'], td.rowLabel, tr.drawRowBorder"
+        ):
+            return node
+        node = node.parent
+    return soup.body or soup
+
+
+def _scan_profile_contacts_globally(soup: BeautifulSoup) -> tuple[list[str], list[str]]:
+    emails: list[str] = []
+    phones: list[str] = []
+    scope = _profile_content_scope(soup)
+    for cf in scope.select("[data-cfemail]"):
+        decoded = _decode_cfemail(str(cf.get("data-cfemail", "")))
+        if decoded and "@" in decoded and "boxrec.com" not in decoded.lower():
+            emails.append(decoded)
+    for mail in scope.select('a[href^="mailto:"]'):
+        e = mail.get("href", "").replace("mailto:", "").split("?")[0].strip()
+        if e and "@" in e and "boxrec.com" not in e.lower():
+            emails.append(e)
+    for tel in scope.select('a[href^="tel:"]'):
+        _add_phones_from_text(tel.get("href", "").replace("tel:", ""), phones)
+    return emails, phones
 
 
 def _row_label_name(row) -> str:
@@ -146,16 +181,33 @@ def _row_label_name(row) -> str:
     return text.lower().rstrip(":")
 
 
-def _row_value_cell(row):
-    label_cell = row.select_one("td.rowLabel, th.rowLabel, th")
-    if not label_cell:
-        return None
-    value_cell = label_cell.find_next_sibling("td")
-    if not value_cell:
-        tds = row.find_all("td", recursive=False)
-        if len(tds) >= 2:
-            value_cell = tds[-1]
-    return value_cell
+def _row_value_cells(row) -> list:
+    """Cellules valeur (hors rowLabel) — gère drapeau + texte sur plusieurs colonnes."""
+    label_cell = row.select_one("td.rowLabel, th.rowLabel")
+    value_cells = [
+        td
+        for td in row.find_all("td", recursive=False)
+        if "rowLabel" not in (td.get("class") or [])
+    ]
+    if not value_cells:
+        tds = row.find_all("td")
+        if label_cell:
+            value_cells = [
+                td for td in tds if td != label_cell and "rowLabel" not in (td.get("class") or [])
+            ]
+        elif len(tds) >= 2:
+            value_cells = [tds[-1]]
+    if not value_cells:
+        th = row.select_one("th")
+        td = row.select_one("td")
+        if th and td and th != label_cell:
+            value_cells = [td]
+    return value_cells
+
+
+def _cells_combined_text(cells: list) -> str:
+    parts = [c.get_text(" ", strip=True) for c in cells if c.get_text(strip=True)]
+    return " ".join(parts)
 
 
 def _label_matches(label: str, keys: frozenset[str]) -> bool:
@@ -169,13 +221,14 @@ def _extract_profile_fields_fallback(html: str) -> tuple[str, str, str]:
     chunk = re.split(r"<h2[\s>]", html, maxsplit=1, flags=re.I)[0]
     row_re = re.compile(
         r"<tr[^>]*>[\s\S]*?<(?:td|th)[^>]*\browLabel\b[^>]*>[\s\S]*?"
-        r"<b>\s*([^<]+?)\s*</b>[\s\S]*?</(?:td|th)>\s*<td[^>]*>([\s\S]*?)</td>",
+        r"<b>\s*([^<]+?)\s*</b>[\s\S]*?</(?:td|th)>((?:\s*<td[^>]*>[\s\S]*?</td>)+)",
         re.I,
     )
-    for label_raw, cell_html in row_re.findall(chunk):
+    for label_raw, cells_html in row_re.findall(chunk):
         label = label_raw.strip().lower().rstrip(":")
-        cell_text = re.sub(r"<[^>]+>", " ", cell_html)
+        cell_text = re.sub(r"<[^>]+>", " ", cells_html)
         cell_text = re.sub(r"\s+", " ", cell_text).strip()
+        cell_html = cells_html
         if _label_matches(label, _EMAIL_LABELS):
             cf = re.search(r'data-cfemail=["\']([a-f0-9]+)["\']', cell_html, re.I)
             if cf:
@@ -214,25 +267,36 @@ def _extract_profile_fields(soup: BeautifulSoup, html: str = "") -> tuple[str, s
 
     for root in _find_profile_sections(soup):
         for row in root.select("tr"):
-            value_cell = _row_value_cell(row)
-            if not value_cell:
+            value_cells = _row_value_cells(row)
+            if not value_cells:
                 continue
             label = _row_label_name(row)
-            value = value_cell.get_text(" ", strip=True)
-            for cf in value_cell.select("[data-cfemail]"):
-                decoded = _decode_cfemail(str(cf.get("data-cfemail", "")))
-                if decoded and "@" in decoded and "boxrec.com" not in decoded.lower():
-                    emails.append(decoded)
+            value = _cells_combined_text(value_cells)
+            for value_cell in value_cells:
+                for cf in value_cell.select("[data-cfemail]"):
+                    decoded = _decode_cfemail(str(cf.get("data-cfemail", "")))
+                    if decoded and "@" in decoded and "boxrec.com" not in decoded.lower():
+                        emails.append(decoded)
+                if _label_matches(label, _EMAIL_LABELS):
+                    for mail in value_cell.select('a[href^="mailto:"]'):
+                        e = mail.get("href", "").replace("mailto:", "").split("?")[0].strip()
+                        if e and "@" in e and "boxrec.com" not in e.lower():
+                            emails.append(e)
             if _label_matches(label, _EMAIL_LABELS):
                 m = EMAIL_RE.search(value)
                 if m and "boxrec.com" not in m.group(0).lower():
                     emails.append(m.group(0))
             if _label_matches(label, _PHONE_LABELS):
                 _add_phones_from_text(value, phones)
-                for tel in value_cell.select('a[href^="tel:"]'):
-                    _add_phones_from_text(tel.get("href", "").replace("tel:", ""), phones)
+                for value_cell in value_cells:
+                    for tel in value_cell.select('a[href^="tel:"]'):
+                        _add_phones_from_text(tel.get("href", "").replace("tel:", ""), phones)
             if _label_matches(label, _ADDRESS_LABELS) and value:
                 address_parts.append(value)
+
+    global_emails, global_phones = _scan_profile_contacts_globally(soup)
+    emails.extend(global_emails)
+    phones.extend(global_phones)
 
     email = emails[0] if emails else ""
     phone = " ; ".join(dict.fromkeys(phones)) if phones else ""

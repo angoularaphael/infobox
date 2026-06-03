@@ -37,9 +37,18 @@ def test_profile_cfemail():
     assert "Kaoz boxing" in prof["address"]
 
 
+def test_profile_flag_columns():
+    html = (FIX / "profile_manager_flag.html").read_text(encoding="utf-8")
+    prof = parse_profile_page(html)
+    assert prof["email"] == "edgars.kukainis@inbox.lv"
+    assert "29991704" in prof["phone"]
+    assert "Riga" in prof["address"]
+
+
 if __name__ == "__main__":
     test_list_page()
     test_profile_page()
     test_search_country_from_url()
     test_profile_cfemail()
+    test_profile_flag_columns()
     print("OK — parseur")
