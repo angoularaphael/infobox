@@ -6,6 +6,7 @@ data/settings.json
 venv/
 *.html
 !fixtures/*.html
+!static/*.html
 probe_html.py
 fetch_once.py
 sample_page.html

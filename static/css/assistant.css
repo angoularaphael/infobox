@@ -320,6 +320,11 @@ details.fold textarea {
   color: var(--gray-800);
 }
 
+#importStatus.error {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
 .footer-note {
   margin-top: 2rem;
   text-align: center;

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>InfoBox — Assistant & favori BoxRec</title>
+  <link rel="stylesheet" href="/static/css/assistant.css" />
+</head>
+<body class="assistant-page">
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <div class="shell">
+    <header class="top-bar">
+      <a class="brand" href="/assistant">Info<span>Box</span></a>
+      <span id="serverStatus" class="status-pill">Serveur…</span>
+    </header>
+
+    <section class="hero">
+      <h1>Exportez vos contacts BoxRec en un clic</h1>
+      <p>
+        Installez le favori une fois, puis sur <strong>boxrec.com</strong> lancez la collecte.
+        CSV et PDF se téléchargent automatiquement. Vous pouvez <strong>arrêter</strong> à tout moment.
+      </p>
+    </section>
+
+    <div id="favoriErreur" class="alert alert-warn" style="display: none"></div>
+
+    <div class="steps-flow">
+      <article class="step-card">
+        <div class="step-head">
+          <span class="step-num">1</span>
+          <div>
+            <h2>Installer le favori</h2>
+            <p>Glissez le bouton vers la barre de favoris, ou téléchargez le fichier d’import.</p>
+          </div>
+        </div>
+
+        <div class="bookmarklet-zone">
+          <a id="bookmarkletBtn" href="javascript:void(0)" role="button" draggable="true">
+            InfoBox v3.2 — glisser vers les favoris
+          </a>
+          <p class="hint">Glisser-déposer uniquement — ne cliquez pas pour « ajouter aux favoris » sur cette page.</p>
+        </div>
+
+        <div class="actions-row">
+          <a id="btnDownloadFavori" class="btn btn-primary" href="/download/favori-infobox.html">
+            Télécharger favori-infobox.html
+          </a>
+          <button type="button" id="btnCopyBookmarklet" class="btn">Copier le lien du favori</button>
+          <a class="btn" href="/install-favori" target="_blank" rel="noopener">Aide installation</a>
+        </div>
+        <p id="copyStatus" class="hint" style="margin-top: 0.65rem"></p>
+
+        <details class="fold">
+          <summary>Lien du favori (manuel)</summary>
+          <div class="fold-body">
+            <p>Nom : <strong>InfoBox</strong> — URL : doit commencer par <code>javascript:</code></p>
+            <textarea id="bookmarkletUrl" readonly rows="2"></textarea>
+          </div>
+        </details>
+      </article>
+
+      <article class="step-card">
+        <div class="step-head">
+          <span class="step-num">2</span>
+          <div>
+            <h2>Sur BoxRec</h2>
+            <p>Connectez-vous, ouvrez la liste filtrée (ex. managers United Kingdom).</p>
+          </div>
+        </div>
+        <p class="hint" style="margin: 0">
+          <a href="https://boxrec.com/en/login" target="_blank" rel="noopener">boxrec.com</a>
+          → recherche par pays et rôle → page avec le tableau de noms.
+        </p>
+      </article>
+
+      <article class="step-card">
+        <div class="step-head">
+          <span class="step-num">3</span>
+          <div>
+            <h2>Lancer la collecte</h2>
+            <p>Cliquez le favori <strong>InfoBox</strong> sur la page liste. CSV et PDF se téléchargent sur BoxRec.</p>
+          </div>
+        </div>
+        <p class="hint" style="margin: 0">
+          Bouton <strong>« Arrêter la collecte »</strong> dans la fenêtre InfoBox pour interrompre et exporter le partiel.
+        </p>
+      </article>
+
+      <article class="step-card">
+        <div class="step-head">
+          <span class="step-num">4</span>
+          <div>
+            <h2>Optionnel — réimporter ici</h2>
+            <p>Si vous avez besoin d’un autre PDF ou CSV depuis cette page (secours).</p>
+          </div>
+        </div>
+        <p class="hint" style="margin: 0 0 0.75rem">
+          Le CSV téléchargé par le favori suffit pour Excel. Collez ici seulement pour un export supplémentaire.
+        </p>
+        <p class="hint" style="margin: 0 0 0.5rem">
+          <label for="importCsvFile">Ou charger le CSV :</label>
+        </p>
+        <input type="file" id="importCsvFile" accept=".csv,text/csv" />
+        <textarea id="importJson" rows="5" placeholder="Collez ici après le favori (Ctrl+V) — ou laissez vide si vous utilisez le CSV seul" style="width:100%;margin-top:0.75rem;padding:0.5rem;font-size:0.85rem;border:1px solid #94a3b8;border-radius:6px"></textarea>
+        <div class="actions-row">
+          <button type="button" id="btnImport" class="btn btn-primary">Importer</button>
+          <button type="button" id="btnCsv" class="btn">Télécharger CSV</button>
+          <button type="button" id="btnPdf" class="btn">Télécharger PDF</button>
+        </div>
+        <p id="importStatus" class="hint" style="margin-top: 0.65rem"></p>
+      </article>
+    </div>
+
+    <p class="footer-note">
+      InfoBox — export managers / matchmakers · Fichiers dans Téléchargements
+    </p>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <script src="/static/js/pdf-utils.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/assistant.js"></script>
+</body>
+</html>
