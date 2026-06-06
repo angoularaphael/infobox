@@ -23,7 +23,7 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-VALID_ROLES = ("manager", "matchmaker", "promoter")
+VALID_ROLES = ("manager", "matchmaker", "promoter", "trainer", "media")
 
 
 class BoxRecError(Exception):

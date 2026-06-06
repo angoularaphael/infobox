@@ -12,11 +12,51 @@ PHONE_RE = re.compile(
     r"(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)?\d{3,4}[\s.-]?\d{3,4}(?:[\s.-]?\d{1,6})?"
 )
 
-ROLE_PATHS = {
-    "manager": "manager",
-    "matchmaker": "matchmaker",
-    "promoter": "promoter",
-}
+PERSON_ROLES = (
+    "manager",
+    "matchmaker",
+    "promoter",
+    "trainer",
+    "media",
+    "referee",
+    "judge",
+    "inspector",
+    "supervisor",
+    "doctor",
+    "timekeeper",
+)
+
+_PERSON_HREF_RE = re.compile(
+    r"/en/(" + "|".join(PERSON_ROLES) + r")/(\d+)(?:/|$|\?|#)",
+    re.I,
+)
+
+_NON_PERSON_PATH_SEGMENTS = frozenset(
+    {
+        "locations",
+        "login",
+        "event",
+        "events",
+        "bout",
+        "bouts",
+        "ratings",
+        "schedule",
+        "results",
+        "date",
+        "champions",
+        "clubs",
+        "titles",
+        "quick_search",
+        "proboxer",
+        "amateurboxer",
+        "boxer",
+        "wiki",
+        "forum",
+        "shop",
+    }
+)
+
+_LIST_LOCATION_HEADERS = ("location", "residence", "town", "city", "résidence")
 
 _COUNTRY_CODE_LABELS = {
     "GBR": "Royaume-Uni",
@@ -30,26 +70,101 @@ _COUNTRY_CODE_LABELS = {
     "DE": "Allemagne",
     "IRL": "Irlande",
     "IE": "Irlande",
+    "GD": "Grenada",
+    "GRD": "Grenada",
+    "VEN": "Venezuela",
+    "VE": "Venezuela",
+    "PRI": "Puerto Rico",
+    "PR": "Puerto Rico",
+    "ESP": "Spain",
+    "ES": "Spain",
 }
+
+
+def _person_href_match(href: str) -> re.Match[str] | None:
+    if not href:
+        return None
+    m = _PERSON_HREF_RE.search(href)
+    if m:
+        return m
+    generic = re.search(r"/en/([a-z][a-z0-9_]*)/(\d+)(?:/|$|\?|#)", href, re.I)
+    if generic and generic.group(1).lower() not in _NON_PERSON_PATH_SEGMENTS:
+        return generic
+    return None
+
+
+def _list_column_index(headers: list[str], names: tuple[str, ...]) -> int:
+    for name in names:
+        if name in headers:
+            return headers.index(name)
+    return -1
+
+
+def _find_list_table(soup: BeautifulSoup):
+    best = None
+    best_count = 0
+    for table in soup.select("table.dataTable, table"):
+        count = sum(1 for a in table.select("a[href]") if _person_href_match(a.get("href", "")))
+        if count > best_count:
+            best = table
+            best_count = count
+    return best
+
+
+def extract_search_country_from_html(html: str) -> str:
+    """Pays de recherche depuis le formulaire ou le titre de page BoxRec."""
+    soup = BeautifulSoup(html, "html.parser")
+    for selector in (
+        'input[name="l[loc_txt]"]',
+        'input[name*="loc_txt"]',
+        'input[name="l[location]"]',
+    ):
+        inp = soup.select_one(selector)
+        if inp and inp.get("value", "").strip():
+            value = inp["value"].strip()
+            if not re.fullmatch(r"[a-z]{2,3}_?", value, re.I):
+                return value
+    for form in soup.select("form"):
+        action = form.get("action") or ""
+        if "locations/people" in action or 'name="l[role]"' in str(form):
+            from_form = extract_search_country_from_url(urljoin("https://boxrec.com", action))
+            if from_form:
+                return from_form
+    for a in soup.select('a[href*="locations/people"]'):
+        from_link = extract_search_country_from_url(urljoin("https://boxrec.com", a.get("href", "")))
+        if from_link:
+            return from_link
+    title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    if title:
+        m = re.search(r"\b(?:in|near|around)\s+(.+?)(?:\s*[-|]|$)", title, re.I)
+        if m:
+            return m.group(1).strip()
+    return ""
 
 
 def extract_search_country_from_url(url: str) -> str:
     """Pays ciblé par la recherche BoxRec (paramètres l[loc_txt], l[country], etc.)."""
-    if not url or "?" not in url:
+    if not url:
         return ""
-    qs = parse_qs(urlparse(url).query)
-    loc_txt = (qs.get("l[loc_txt]") or [""])[0].strip()
-    if loc_txt:
-        return loc_txt
-    country = (qs.get("l[country]") or [""])[0].strip().upper()
-    if country:
-        return _COUNTRY_CODE_LABELS.get(country, country)
-    level = (qs.get("l[level_id]") or [""])[0].strip().upper()
-    if level in _COUNTRY_CODE_LABELS:
-        return _COUNTRY_CODE_LABELS[level]
-    location = (qs.get("l[location]") or [""])[0].strip().lower()
-    if location.startswith("gb"):
-        return _COUNTRY_CODE_LABELS["GB"]
+    if "?" in url:
+        qs = parse_qs(urlparse(url).query)
+        loc_txt = (qs.get("l[loc_txt]") or [""])[0].strip()
+        if loc_txt:
+            return loc_txt
+        country = (qs.get("l[country]") or [""])[0].strip().upper()
+        if country:
+            return _COUNTRY_CODE_LABELS.get(country, country)
+        level = (qs.get("l[level_id]") or [""])[0].strip().upper()
+        if level in _COUNTRY_CODE_LABELS:
+            return _COUNTRY_CODE_LABELS[level]
+        location = (qs.get("l[location]") or [""])[0].strip().lower()
+        if location.startswith("gb"):
+            return _COUNTRY_CODE_LABELS["GB"]
+        code = re.match(r"([a-z]{2,3})_?", location)
+        if code:
+            mapped = _COUNTRY_CODE_LABELS.get(code.group(1).upper())
+            if mapped:
+                return mapped
     return ""
 
 
@@ -318,6 +433,41 @@ def _extract_email_phone_from_soup(soup: BeautifulSoup) -> tuple[str, str]:
     return email, phone
 
 
+def _find_row_profile_link(tr) -> Any | None:
+    for a in tr.select("a.personLink, a[href]"):
+        if _person_href_match(a.get("href", "")):
+            return a
+    return None
+
+
+def _extract_row_location(tds, headers: list[str], link_td) -> str:
+    loc_idx = _list_column_index(headers, _LIST_LOCATION_HEADERS)
+    if loc_idx >= 0 and loc_idx < len(tds):
+        return tds[loc_idx].get_text(" ", strip=True)
+    for td in tds:
+        if td == link_td:
+            continue
+        if td.select_one("img[src*='flag'], img[alt]"):
+            text = td.get_text(" ", strip=True)
+            if text:
+                return text
+    if len(tds) > 1:
+        for td in tds[1:]:
+            if td == link_td:
+                continue
+            text = td.get_text(" ", strip=True)
+            if text and not re.fullmatch(r"\d+", text) and text not in {"♂", "♀", "male", "female"}:
+                return text
+    return ""
+
+
+def _extract_row_company(tds, headers: list[str]) -> str:
+    company_idx = _list_column_index(headers, ("company", "société", "societe"))
+    if company_idx >= 0 and company_idx < len(tds):
+        return tds[company_idx].get_text(" ", strip=True)
+    return ""
+
+
 def parse_list_page(
     html: str,
     base_url: str = "https://boxrec.com",
@@ -325,45 +475,38 @@ def parse_list_page(
 ) -> dict[str, Any]:
     """Extrait les personnes et métadonnées de pagination d'une page liste."""
     soup = BeautifulSoup(html, "html.parser")
-    search_country = extract_search_country_from_url(list_url or base_url)
+    search_country = extract_search_country_from_url(list_url or "") or extract_search_country_from_html(html)
     people: list[dict[str, str]] = []
     seen_ids: set[str] = set()
 
-    table = soup.select_one("table.dataTable") or soup.select_one("table")
+    table = _find_list_table(soup)
     if table:
-        header_cells = table.select("tr th")
+        header_row = table.select_one("tr:has(th)") or table.select_one("tr")
+        header_cells = header_row.select("th") if header_row else []
+        if not header_cells and header_row:
+            header_cells = header_row.find_all("td")
         headers = [th.get_text(" ", strip=True).lower() for th in header_cells]
         for tr in table.select("tr"):
-            if tr.find("th"):
+            if tr.find("th") and tr != header_row:
                 continue
-            link = tr.select_one("a.personLink") or tr.select_one("a[href*='boxrec.com']")
+            link = _find_row_profile_link(tr)
             if not link:
-                href_candidate = tr.select_one("a[href]")
-                if href_candidate and re.search(r"/(manager|matchmaker|promoter)/\d+", href_candidate.get("href", "")):
-                    link = href_candidate
-                else:
-                    continue
+                continue
             href = link.get("href", "")
             full_url = urljoin(base_url, href)
             name = link.get_text(" ", strip=True)
-            person_id = ""
-            m = re.search(r"/(\d+)(?:/|$)", href)
-            if m:
-                person_id = m.group(1)
+            match = _person_href_match(href)
+            person_id = match.group(2) if match else ""
             if person_id and person_id in seen_ids:
                 continue
             if person_id:
                 seen_ids.add(person_id)
 
             tds = tr.find_all("td")
-            row_data = [td.get_text(" ", strip=True) for td in tds]
-            location = ""
-            if headers and "location" in headers:
-                idx = headers.index("location")
-                if idx < len(row_data):
-                    location = row_data[idx]
-            elif len(row_data) > 1:
-                location = row_data[1] if len(row_data) > 1 else ""
+            link_td = link.find_parent("td")
+            location = _extract_row_location(tds, headers, link_td)
+            company = _extract_row_company(tds, headers)
+            address = company
 
             people.append(
                 {
@@ -372,19 +515,19 @@ def parse_list_page(
                     "profile_url": full_url,
                     "location": location,
                     "search_country": search_country,
-                    "address": "",
+                    "address": address,
                     "email": "",
                     "phone": "",
                 }
             )
 
     if not people:
-        for link in soup.select("a.personLink, a[href*='/manager/'], a[href*='/matchmaker/'], a[href*='/promoter/']"):
+        for link in soup.select("a.personLink, a[href]"):
             href = link.get("href", "")
-            if not re.search(r"/(manager|matchmaker|promoter)/\d+", href):
+            match = _person_href_match(href)
+            if not match:
                 continue
-            person_id = re.search(r"/(\d+)", href)
-            pid = person_id.group(1) if person_id else ""
+            pid = match.group(2)
             if pid in seen_ids:
                 continue
             seen_ids.add(pid)
@@ -428,7 +571,9 @@ def parse_list_page(
         next_offset = current_offset + page_size
 
     total_text = ""
-    for node in soup.find_all(string=re.compile(r"\d+\s+results?", re.I)):
+    for node in soup.find_all(
+        string=re.compile(r"\d+\s+(?:results?|people|personnes?)", re.I)
+    ):
         total_text = str(node)
         break
 
