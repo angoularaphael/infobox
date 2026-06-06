@@ -301,10 +301,14 @@ def _find_profile_sections(soup: BeautifulSoup) -> list[Any]:
             if node is None:
                 break
             if node.select_one(
-                "tr td.rowLabel, tr.drawRowBorder, tr th, a[href^='mailto:'], [data-cfemail]"
+                "tr td.rowLabel, tr.drawRowBorder, tr th, a[href^='mailto:'], "
+                "[data-cfemail], div.flex-row .font-bold"
             ):
                 return [node]
             node = node.parent
+    flex_scope = _find_profile_flex_scope(soup)
+    if flex_scope:
+        return [flex_scope]
     return [soup.body] if soup.body else [soup]
 
 
@@ -317,7 +321,8 @@ def _profile_content_scope(soup: BeautifulSoup):
         if node is None:
             break
         if node.select_one(
-            "[data-cfemail], a[href^='mailto:'], td.rowLabel, tr.drawRowBorder"
+            "[data-cfemail], a[href^='mailto:'], td.rowLabel, tr.drawRowBorder, "
+            "div.flex-row .font-bold"
         ):
             return node
         node = node.parent
@@ -383,6 +388,65 @@ def _label_matches(label: str, keys: frozenset[str]) -> bool:
     return any(label == k or label.startswith(k) for k in keys)
 
 
+def _field_label_from_node(node) -> str:
+    if not node:
+        return ""
+    bold = node.select_one(".font-bold, b, strong")
+    text = bold.get_text(" ", strip=True) if bold else node.get_text(" ", strip=True)
+    return text.lower().rstrip(":").lstrip("#").strip()
+
+
+def _find_profile_flex_scope(soup: BeautifulSoup):
+    h1 = soup.select_one("h1")
+    if not h1:
+        return None
+    node = h1.parent
+    for _ in range(25):
+        if node is None:
+            break
+        if node.select_one("div.flex-row .font-bold, div.flex.flex-row .font-bold"):
+            return node
+        node = node.parent
+    return None
+
+
+def _extract_profile_fields_from_flex_rows(
+    soup: BeautifulSoup, scope=None
+) -> tuple[list[str], list[str], list[str]]:
+    emails: list[str] = []
+    phones: list[str] = []
+    address_parts: list[str] = []
+    root = scope or soup
+    for row in root.select("div.flex-row, div.flex.flex-row"):
+        children = [c for c in row.find_all("div", recursive=False)]
+        if len(children) < 2:
+            continue
+        label = _field_label_from_node(children[0])
+        if not label:
+            continue
+        value_cell = children[1]
+        value = value_cell.get_text(" ", strip=True)
+        if _label_matches(label, _EMAIL_LABELS):
+            for cf in value_cell.select("[data-cfemail]"):
+                decoded = _decode_cfemail(str(cf.get("data-cfemail", "")))
+                if decoded and "@" in decoded and "boxrec.com" not in decoded.lower():
+                    emails.append(decoded)
+            for mail in value_cell.select('a[href^="mailto:"]'):
+                e = mail.get("href", "").replace("mailto:", "").split("?")[0].strip()
+                if e and "@" in e and "boxrec.com" not in e.lower():
+                    emails.append(e)
+            m = EMAIL_RE.search(value)
+            if m and "boxrec.com" not in m.group(0).lower():
+                emails.append(m.group(0))
+        if _label_matches(label, _PHONE_LABELS):
+            _add_phones_from_text(value, phones)
+            for tel in value_cell.select('a[href^="tel:"]'):
+                _add_phones_from_text(tel.get("href", "").replace("tel:", ""), phones)
+        if _label_matches(label, _ADDRESS_LABELS) and value:
+            address_parts.append(value)
+    return emails, phones, address_parts
+
+
 def _extract_profile_fields_fallback(html: str) -> tuple[str, str, str]:
     emails: list[str] = []
     phones: list[str] = []
@@ -395,6 +459,30 @@ def _extract_profile_fields_fallback(html: str) -> tuple[str, str, str]:
     )
     for label_raw, cells_html in row_re.findall(chunk):
         label = label_raw.strip().lower().rstrip(":")
+        cell_text = re.sub(r"<[^>]+>", " ", cells_html)
+        cell_text = re.sub(r"\s+", " ", cell_text).strip()
+        cell_html = cells_html
+        if _label_matches(label, _EMAIL_LABELS):
+            cf = re.search(r'data-cfemail=["\']([a-f0-9]+)["\']', cell_html, re.I)
+            if cf:
+                decoded = _decode_cfemail(cf.group(1))
+                if decoded and "@" in decoded and "boxrec.com" not in decoded.lower():
+                    emails.append(decoded)
+            m = EMAIL_RE.search(cell_text)
+            if m and "boxrec.com" not in m.group(0).lower():
+                emails.append(m.group(0))
+        if _label_matches(label, _PHONE_LABELS):
+            _add_phones_from_text(cell_text, phones)
+        if _label_matches(label, _ADDRESS_LABELS) and cell_text:
+            address_parts.append(cell_text)
+    flex_re = re.compile(
+        r'<div[^>]*class="[^"]*flex[^"]*flex-row[^"]*"[^>]*>[\s\S]*?'
+        r'(?:class="[^"]*font-bold[^"]*"[^>]*>|<b[^>]*>)\s*([^<]+?)\s*</(?:div|b|span)>'
+        r"[\s\S]*?</div>\s*<div[^>]*>([\s\S]*?)</div>\s*</div>",
+        re.I,
+    )
+    for label_raw, cells_html in flex_re.findall(chunk):
+        label = label_raw.strip().lower().rstrip(":").lstrip("#")
         cell_text = re.sub(r"<[^>]+>", " ", cells_html)
         cell_text = re.sub(r"\s+", " ", cell_text).strip()
         cell_html = cells_html
@@ -462,6 +550,12 @@ def _extract_profile_fields(soup: BeautifulSoup, html: str = "") -> tuple[str, s
                         _add_phones_from_text(tel.get("href", "").replace("tel:", ""), phones)
             if _label_matches(label, _ADDRESS_LABELS) and value:
                 address_parts.append(value)
+
+    flex_scope = _find_profile_flex_scope(soup) or _profile_content_scope(soup)
+    flex_e, flex_p, flex_a = _extract_profile_fields_from_flex_rows(soup, flex_scope)
+    emails.extend(flex_e)
+    phones.extend(flex_p)
+    address_parts.extend(flex_a)
 
     global_emails, global_phones = _scan_profile_contacts_globally(soup)
     emails.extend(global_emails)

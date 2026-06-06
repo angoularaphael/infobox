@@ -1,6 +1,6 @@
 /**
  * Favori InfoBox — boxrec.com (utilisateur connecté).
- * v3.3 — layout humanContainer + URLs locations_filter
+ * v3.4 — profils flex-row (phones/email) + listes humanContainer
  */
 const EMAIL_LABELS = ["email", "e-mail", "courriel", "mail"];
 const PHONE_LABELS = [
@@ -86,6 +86,61 @@ function labelMatches(label, keys) {
   return keys.some((k) => label === k || label.startsWith(k));
 }
 
+function fieldLabelFromNode(node) {
+  if (!node) return "";
+  const bold = node.querySelector(".font-bold, b, strong");
+  const raw = (bold ? bold.textContent : node.textContent).trim().toLowerCase();
+  return raw.replace(/:$/, "").replace(/^#/, "").trim();
+}
+
+function extractProfileDetailsFromFlexRows(root, target) {
+  const emails = new Set();
+  const phones = new Set();
+  const addressParts = [];
+
+  root.querySelectorAll("div.flex-row, div.flex.flex-row").forEach((row) => {
+    const children = [...row.children].filter((el) => el.tagName === "DIV");
+    if (children.length < 2) return;
+    const label = fieldLabelFromNode(children[0]);
+    if (!label) return;
+    const valueCell = children[1];
+    const val = valueCell.textContent.replace(/\s+/g, " ").trim();
+
+    if (labelMatches(label, EMAIL_LABELS)) {
+      valueCell.querySelectorAll("[data-cfemail]").forEach((el) => {
+        const e = decodeCfEmail(el.getAttribute("data-cfemail"));
+        if (isValidContactEmail(e)) emails.add(e);
+      });
+      valueCell.querySelectorAll('a[href^="mailto:"]').forEach((a) => {
+        const e = a.getAttribute("href").replace(/^mailto:/i, "").split("?")[0].trim();
+        if (isValidContactEmail(e)) emails.add(e);
+      });
+      const m = val.match(EMAIL_RE);
+      if (m && isValidContactEmail(m[0])) emails.add(m[0]);
+    }
+    if (labelMatches(label, PHONE_LABELS)) {
+      addPhonesFromText(val, phones);
+      valueCell.querySelectorAll('a[href^="tel:"]').forEach((a) => {
+        addPhonesFromText(a.getAttribute("href").replace(/^tel:/i, ""), phones);
+      });
+    }
+    if (labelMatches(label, ADDRESS_LABELS) && val) addressParts.push(val);
+  });
+
+  mergeContactFields(target, emails, phones, addressParts);
+}
+
+function findProfileFlexScope(doc) {
+  const h1 = doc.querySelector("h1");
+  if (!h1) return null;
+  let node = h1.parentElement;
+  for (let n = 0; n < 25 && node; n++) {
+    if (node.querySelector("div.flex-row .font-bold, div.flex.flex-row .font-bold")) return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
 /** Toutes les tables « fiche » (rowLabel), pas le menu du site. */
 function findProfileSections(doc) {
   const sections = [];
@@ -99,7 +154,7 @@ function findProfileSections(doc) {
       for (let n = 0; n < 16 && node; n++) {
         if (
           node.querySelector(
-            "tr td.rowLabel, tr.drawRowBorder, tr th, a[href^='mailto:'], [data-cfemail]"
+            "tr td.rowLabel, tr.drawRowBorder, tr th, a[href^='mailto:'], [data-cfemail], div.flex-row .font-bold"
           )
         ) {
           sections.push(node);
@@ -120,7 +175,7 @@ function profileContentScope(doc) {
   for (let n = 0; n < 20 && node; n++) {
     if (
       node.querySelector(
-        "[data-cfemail], a[href^='mailto:'], td.rowLabel, tr.drawRowBorder"
+        "[data-cfemail], a[href^='mailto:'], td.rowLabel, tr.drawRowBorder, div.flex-row .font-bold"
       )
     ) {
       return node;
@@ -235,6 +290,27 @@ function extractProfileDetailsFallback(html, target) {
     if (labelMatches(label, PHONE_LABELS)) addPhonesFromText(cellText, phones);
     if (labelMatches(label, ADDRESS_LABELS) && cellText) addressParts.push(cellText);
   }
+  const flexRe =
+    /<div[^>]*class="[^"]*flex[^"]*flex-row[^"]*"[^>]*>[\s\S]*?(?:class="[^"]*font-bold[^"]*"[^>]*>|<b[^>]*>)\s*([^<]+?)\s*<\/(?:div|b|span)>[\s\S]*?<\/div>\s*<div[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
+  while ((m = flexRe.exec(chunk))) {
+    const label = m[1].trim().toLowerCase().replace(/:$/, "").replace(/^#/, "");
+    const cellText = m[2]
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const cellHtml = m[2];
+    if (labelMatches(label, EMAIL_LABELS)) {
+      const cf = cellHtml.match(/data-cfemail=["']([a-f0-9]+)["']/i);
+      if (cf) {
+        const e = decodeCfEmail(cf[1]);
+        if (isValidContactEmail(e)) emails.add(e);
+      }
+      const em = cellText.match(EMAIL_RE);
+      if (em && isValidContactEmail(em[0])) emails.add(em[0]);
+    }
+    if (labelMatches(label, PHONE_LABELS)) addPhonesFromText(cellText, phones);
+    if (labelMatches(label, ADDRESS_LABELS) && cellText) addressParts.push(cellText);
+  }
   mergeContactFields(target, emails, phones, addressParts);
 }
 
@@ -328,7 +404,12 @@ function applyContactFieldsToPerson(person, found) {
 
 function extractContactsFromDocument(doc) {
   const found = { email: "", phone: "", address: "" };
-  findProfileSections(doc).forEach((root) => extractProfileDetails(root, found));
+  findProfileSections(doc).forEach((root) => {
+    extractProfileDetails(root, found);
+    extractProfileDetailsFromFlexRows(root, found);
+  });
+  const flexScope = findProfileFlexScope(doc);
+  if (flexScope) extractProfileDetailsFromFlexRows(flexScope, found);
   scanProfileContactsGlobally(doc, found);
   return found;
 }
@@ -422,7 +503,7 @@ async function enrichOneProfile(person, { useIframe = false } = {}) {
     const html = await fetchProfileHtml(person.profile_url);
     if (html) extractContactsFromHtml(html, person);
   }
-  if (useIframe || (!person.email && !person.phone)) {
+  if (useIframe || !person.email || !person.phone) {
     await enrichOneProfileIframe(person);
   }
 }
@@ -1097,7 +1178,7 @@ async function infoboxExtractFromPageCore() {
   const role = getRoleFromUrl(location.href);
   let searchCountry = getSearchCountryFromUrl(location.href) || getSearchCountryFromPage(document);
 
-  infoboxProgressShow("InfoBox v3.3", "Détection de la liste BoxRec…", { showStop: false });
+  infoboxProgressShow("InfoBox v3.4", "Détection de la liste BoxRec…", { showStop: false });
   const listReady = await waitForListContent(document);
   if (!listReady) {
     infoboxProgressHide(0);

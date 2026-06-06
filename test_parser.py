@@ -101,6 +101,16 @@ def test_profile_roberto_andueza():
     assert "GLOBALBOXING" in prof["address"]
 
 
+def test_profile_roberto_live_flex_layout():
+    path = FIX / "profile_manager_live.html"
+    if not path.exists():
+        return
+    prof = parse_profile_page(path.read_text(encoding="utf-8"))
+    assert prof["email"] == "randueza03@gmail.com"
+    assert "584141400775" in prof["phone"]
+    assert "Caracas" in prof["address"]
+
+
 if __name__ == "__main__":
     test_list_page()
     test_profile_page()
@@ -112,4 +122,5 @@ if __name__ == "__main__":
     test_role_and_country_new_url_params()
     test_search_country_from_html()
     test_profile_roberto_andueza()
+    test_profile_roberto_live_flex_layout()
     print("OK — parseur")
