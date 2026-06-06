@@ -147,7 +147,7 @@ def download_favori_bookmarks_file():
 <TITLE>InfoBox</TITLE>
 <H1>Bookmarks</H1>
 <DL><p>
-    <DT><A HREF="{href}" ADD_DATE="0">InfoBox v3.2 — BoxRec export</A>
+    <DT><A HREF="{href}" ADD_DATE="0">InfoBox v3.3 — BoxRec export</A>
 </DL><p>
 """
     return Response(

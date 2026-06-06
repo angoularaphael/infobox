@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from scraper.parser import (
+    extract_role_from_url,
     extract_search_country_from_html,
     extract_search_country_from_url,
     parse_list_page,
@@ -67,6 +68,30 @@ def test_search_country_from_html():
     assert extract_search_country_from_html(html) == "Grenada"
 
 
+def test_list_human_container():
+    html = (FIX / "list_manager_human_container.html").read_text(encoding="utf-8")
+    data = parse_list_page(
+        html,
+        list_url=(
+            "https://boxrec.com/en/locations/people?"
+            "locations_filter%5BroleSport%5D=2_0&locations_filter%5Bloc_txt%5D=Grenada"
+        ),
+    )
+    assert len(data["people"]) == 1
+    assert data["people"][0]["name"] == "Roberto Andueza"
+    assert data["search_country"] == "Grenada"
+
+
+def test_role_and_country_new_url_params():
+    url = (
+        "https://boxrec.com/en/locations/people?"
+        "locations_filter%5BroleSport%5D=3_0"
+        "&locations_filter%5BaddressId%5D=GD_%7C%7C%7C%7C%7CGrenada"
+    )
+    assert extract_role_from_url(url) == "matchmaker"
+    assert extract_search_country_from_url(url) == "Grenada"
+
+
 def test_profile_roberto_andueza():
     html = (FIX / "profile_manager_roberto.html").read_text(encoding="utf-8")
     prof = parse_profile_page(html)
@@ -83,6 +108,8 @@ if __name__ == "__main__":
     test_profile_cfemail()
     test_profile_flag_columns()
     test_list_grenada_residence_columns()
+    test_list_human_container()
+    test_role_and_country_new_url_params()
     test_search_country_from_html()
     test_profile_roberto_andueza()
     print("OK — parseur")

@@ -1,5 +1,6 @@
 /**
  * Favori InfoBox — boxrec.com (utilisateur connecté).
+ * v3.3 — layout humanContainer + URLs locations_filter
  */
 const EMAIL_LABELS = ["email", "e-mail", "courriel", "mail"];
 const PHONE_LABELS = [
@@ -457,9 +458,36 @@ function personHrefMatch(href) {
   if (!href) return null;
   let m = href.match(PERSON_HREF_RE);
   if (m) return m;
-  m = href.match(/\/en\/([a-z][a-z0-9_]*)\/(\d+)(?:\/|$|\?|#)/i);
+  m = href.match(/\/en\/([a-z][a-z0-9_-]*)\/(\d+)(?:\/|$|\?|#)/i);
   if (m && !NON_PERSON_PATHS.has(m[1].toLowerCase())) return m;
   return null;
+}
+
+const ROLE_SPORT_LABELS = {
+  "2_0": "manager",
+  "3_0": "matchmaker",
+  "4_0": "promoter",
+  "12_0": "trainer",
+  "13_0": "media",
+};
+
+function countryFromAddressId(value) {
+  if (!value || !value.includes("|")) return "";
+  const parts = value.split("|").map((p) => p.trim()).filter(Boolean);
+  if (!parts.length) return "";
+  const country = parts[parts.length - 1];
+  if (/^[A-Z]{2,3}_?\d*$/i.test(country)) {
+    return COUNTRY_CODE_LABELS[country.toUpperCase().replace(/_$/, "")] || country;
+  }
+  return country;
+}
+
+function listSearchRoot(doc) {
+  return (
+    doc.querySelector('turbo-frame#cal-list, turbo-frame[name="cal-list"], #cal-list') ||
+    doc.body ||
+    doc
+  );
 }
 
 function listColumnIndex(headers, names) {
@@ -486,11 +514,87 @@ function findListTable(doc) {
   return best;
 }
 
-function findRowProfileLink(tr) {
-  for (const a of tr.querySelectorAll("a.personLink, a[href]")) {
+function findRowProfileLink(row) {
+  const person = row.querySelector("a.personLink");
+  if (person && personHrefMatch(person.getAttribute("href") || "")) return person;
+  for (const a of row.querySelectorAll("a[href]")) {
     if (personHrefMatch(a.getAttribute("href") || "")) return a;
   }
   return null;
+}
+
+function humanRowLocation(row) {
+  for (const item of row.querySelectorAll(".humanItem")) {
+    if (item.querySelector(".flag-icon, img[src*='flag']")) {
+      const text = item.textContent.replace(/\s+/g, " ").trim();
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
+function humanRowCompany(row) {
+  for (const item of row.querySelectorAll(".humanItem.item-egeshgrg")) {
+    if (item.classList.contains("isHidden")) continue;
+    const text = item.textContent.replace(/\s+/g, " ").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function extractFromHumanContainers(doc, role, searchCountry) {
+  const people = [];
+  const seen = new Set();
+  const root = listSearchRoot(doc);
+  root.querySelectorAll("div.humanContainer").forEach((row) => {
+    if ([...row.classList].some((c) => c.startsWith("border-b-2"))) return;
+    const link = findRowProfileLink(row);
+    if (!link) return;
+    const href = link.href || link.getAttribute("href");
+    const full = href.startsWith("http") ? href : new URL(href, "https://boxrec.com").href;
+    if (seen.has(full)) return;
+    seen.add(full);
+    people.push({
+      name: link.textContent.trim(),
+      profile_url: full,
+      location: humanRowLocation(row),
+      search_country: searchCountry || "",
+      address: humanRowCompany(row),
+      email: "",
+      phone: "",
+      role,
+    });
+  });
+  return people;
+}
+
+function countProfileLinks(doc) {
+  const root = listSearchRoot(doc);
+  let n = 0;
+  root.querySelectorAll("a.personLink, a[href]").forEach((a) => {
+    if (personHrefMatch(a.getAttribute("href") || "")) n += 1;
+  });
+  return n;
+}
+
+function hasListPageContent(doc) {
+  if (extractFromHumanContainers(doc, "manager", "").length > 0) return true;
+  if (findListTable(doc)) return true;
+  if (countProfileLinks(doc) > 0) return true;
+  if (/\/locations\/people/i.test(location.pathname) && /\d+\s+people\b/i.test(doc.body?.innerText || "")) {
+    return countProfileLinks(doc) > 0 || !!listSearchRoot(doc).querySelector("a.personLink");
+  }
+  return false;
+}
+
+async function waitForListContent(doc, maxMs = 10000) {
+  const step = 350;
+  for (let elapsed = 0; elapsed < maxMs; elapsed += step) {
+    if (hasListPageContent(doc)) return true;
+    if (extractListFromDoc(doc, "manager", "").length > 0) return true;
+    await new Promise((r) => setTimeout(r, step));
+  }
+  return hasListPageContent(doc);
 }
 
 function extractRowLocation(tds, headers, linkTd) {
@@ -519,7 +623,7 @@ function extractRowCompany(tds, headers) {
   return idx >= 0 && tds[idx] ? tds[idx].textContent.replace(/\s+/g, " ").trim() : "";
 }
 
-function extractListFromDoc(doc, role, searchCountry) {
+function extractListFromTable(doc, role, searchCountry) {
   const people = [];
   const seen = new Set();
   const table = findListTable(doc);
@@ -565,6 +669,12 @@ function extractListFromDoc(doc, role, searchCountry) {
   return people;
 }
 
+function extractListFromDoc(doc, role, searchCountry) {
+  const human = extractFromHumanContainers(doc, role, searchCountry);
+  if (human.length) return human;
+  return extractListFromTable(doc, role, searchCountry);
+}
+
 function csvToUtf16LeBlob(text) {
   const bytes = new Uint8Array(2 + text.length * 2);
   bytes[0] = 0xff;
@@ -596,7 +706,21 @@ const COUNTRY_CODE_LABELS = {
 };
 
 function getSearchCountryFromPage(doc) {
-  for (const sel of ['input[name="l[loc_txt]"]', 'input[name*="loc_txt"]']) {
+  for (const sel of [
+    'input[name="locations_filter[addressId]"]',
+    'input[name="addressId"]',
+  ]) {
+    const inp = doc.querySelector(sel);
+    if (inp && inp.value && inp.value.trim()) {
+      const fromAddr = countryFromAddressId(inp.value.trim());
+      if (fromAddr) return fromAddr;
+    }
+  }
+  for (const sel of [
+    'input[name="l[loc_txt]"]',
+    'input[name="locations_filter[loc_txt]"]',
+    'input[name*="loc_txt"]',
+  ]) {
     const inp = doc.querySelector(sel);
     if (inp && inp.value && inp.value.trim()) {
       const value = inp.value.trim();
@@ -614,21 +738,30 @@ function getSearchCountryFromPage(doc) {
 }
 
 function getRoleFromUrl(url) {
-  const params = new URL(url).searchParams;
-  let role = params.get("l[role]") || "manager";
-  if (!params.get("l[role]")) {
-    const m = url.match(/l%5Brole%5D=(\w+)/);
-    if (m) role = m[1];
-  }
-  return role;
+  const params = new URL(url, "https://boxrec.com").searchParams;
+  const oldRole = params.get("l[role]");
+  if (oldRole) return oldRole;
+  const roleSport =
+    params.get("locations_filter[roleSport]") || params.get("roleSport");
+  if (roleSport && ROLE_SPORT_LABELS[roleSport]) return ROLE_SPORT_LABELS[roleSport];
+  const m = url.match(/l%5Brole%5D=(\w+)/);
+  if (m) return m[1];
+  return "manager";
 }
 
 /** Pays de la recherche BoxRec (filtre l[loc_txt], l[country], etc.). */
 function getSearchCountryFromUrl(url) {
   try {
     const params = new URL(url, "https://boxrec.com").searchParams;
-    const locTxt = params.get("l[loc_txt]");
+    const locTxt =
+      params.get("l[loc_txt]") || params.get("locations_filter[loc_txt]");
     if (locTxt && locTxt.trim()) return locTxt.trim();
+    const addressId =
+      params.get("locations_filter[addressId]") || params.get("addressId");
+    if (addressId && addressId.trim()) {
+      const fromAddr = countryFromAddressId(addressId.trim());
+      if (fromAddr) return fromAddr;
+    }
     const country = (params.get("l[country]") || "").trim().toUpperCase();
     if (country) return COUNTRY_CODE_LABELS[country] || country;
     const level = (params.get("l[level_id]") || "").trim().toUpperCase();
@@ -688,10 +821,17 @@ function parseTotalPeople(doc) {
 }
 
 function listSearchKey(url) {
-  const u = new URL(url, "https://boxrec.com");
-  const p = new URLSearchParams(u.search);
-  p.delete("offset");
-  return p.toString();
+  return `${getRoleFromUrl(url)}::${getSearchCountryFromUrl(url)}`;
+}
+
+function isListPaginationLink(href, base) {
+  try {
+    const u = new URL(href, base);
+    if (!/\/locations\/people/i.test(u.pathname)) return false;
+    return u.searchParams.has("offset");
+  } catch (_) {
+    return false;
+  }
 }
 
 function listBaseUrlFromPage() {
@@ -712,7 +852,7 @@ function gatherAllListUrls() {
   document.querySelectorAll('a[href*="offset="]').forEach((a) => {
     try {
       const full = new URL(a.href || a.getAttribute("href"), base).href.replace(/#.*$/, "");
-      if (listSearchKey(full) === baseKey) urls.add(full);
+      if (isListPaginationLink(full, base) || listSearchKey(full) === baseKey) urls.add(full);
     } catch (_) {
       /* ignore */
     }
@@ -956,11 +1096,20 @@ async function infoboxExtractFromPageCore() {
   }
   const role = getRoleFromUrl(location.href);
   let searchCountry = getSearchCountryFromUrl(location.href) || getSearchCountryFromPage(document);
-  if (!findListTable(document)) {
-    alert("InfoBox : ouvrez une page liste BoxRec (managers, matchmakers…).");
+
+  infoboxProgressShow("InfoBox v3.3", "Détection de la liste BoxRec…", { showStop: false });
+  const listReady = await waitForListContent(document);
+  if (!listReady) {
+    infoboxProgressHide(0);
+    alert(
+      "InfoBox : liste non détectée.\n\n" +
+        "Attendez que les noms s’affichent sur boxrec.com, puis relancez le favori."
+    );
     return;
   }
+  if (!searchCountry) searchCountry = getSearchCountryFromPage(document);
   if (!searchCountry) {
+    infoboxProgressHide(0);
     alert(
       "InfoBox : pays de recherche non détecté.\n\n" +
         "Filtrez par pays sur BoxRec (ex. Grenada, United Kingdom) puis relancez le favori."
