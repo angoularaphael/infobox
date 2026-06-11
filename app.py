@@ -34,6 +34,7 @@ from infobox.security import register_security
 load_dotenv()
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+INFOBOX_VERSION = "3.6"
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
 register_security(app)
@@ -135,7 +136,7 @@ def _build_bookmarklet_href() -> str:
 
 @app.get("/api/bookmarklet")
 def api_bookmarklet():
-    return jsonify({"href": _build_bookmarklet_href()})
+    return jsonify({"href": _build_bookmarklet_href(), "version": INFOBOX_VERSION})
 
 
 @app.get("/download/favori-infobox.html")
@@ -147,7 +148,7 @@ def download_favori_bookmarks_file():
 <TITLE>InfoBox</TITLE>
 <H1>Bookmarks</H1>
 <DL><p>
-    <DT><A HREF="{href}" ADD_DATE="0">InfoBox v3.4 — BoxRec export</A>
+    <DT><A HREF="{href}" ADD_DATE="0">InfoBox v{INFOBOX_VERSION} — BoxRec export</A>
 </DL><p>
 """
     return Response(

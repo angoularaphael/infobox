@@ -43,10 +43,12 @@ async function copyBookmarkletLink() {
 
 async function setupBookmarklet() {
   let href = "";
+  let version = "";
   try {
     const res = await fetch("/api/bookmarklet");
     const data = await res.json();
     href = data.href || "";
+    version = data.version || "";
   } catch {
     href = "";
   }
@@ -68,6 +70,9 @@ async function setupBookmarklet() {
   if (urlField) urlField.value = href;
   if (link) {
     link.href = href;
+    if (version) {
+      link.textContent = `InfoBox v${version} — glisser vers les favoris`;
+    }
     link.draggable = true;
     link.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("text/plain", href);
