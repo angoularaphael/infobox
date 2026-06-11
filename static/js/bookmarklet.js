@@ -1089,7 +1089,16 @@ function downloadCsv(people, role, searchCountry) {
     "\uFEFFsep=" +
     sep +
     "\n" +
-    ["nom", "email", "telephone", "adresse", "role", "pays_recherche", "localisation"].join(sep) +
+    [
+      "nom",
+      "email",
+      "telephone",
+      "adresse",
+      "role",
+      "pays_recherche",
+      "localisation",
+      "url_profil",
+    ].join(sep) +
     "\n" +
     people
       .map((p) =>
@@ -1101,6 +1110,7 @@ function downloadCsv(people, role, searchCountry) {
           p.role,
           p.search_country || country,
           p.location,
+          p.profile_url,
         ]
           .map(esc)
           .join(sep)

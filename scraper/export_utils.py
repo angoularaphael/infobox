@@ -26,6 +26,7 @@ def people_to_csv_rows(people: list[dict[str, Any]]) -> str:
             "role",
             "pays_recherche",
             "localisation",
+            "url_profil",
         ],
         delimiter=";",
         extrasaction="ignore",
@@ -41,6 +42,7 @@ def people_to_csv_rows(people: list[dict[str, Any]]) -> str:
                 "role": p.get("role", ""),
                 "pays_recherche": p.get("search_country", ""),
                 "localisation": p.get("location", ""),
+                "url_profil": p.get("profile_url", ""),
             }
         )
     text = "sep=;\n" + buf.getvalue()

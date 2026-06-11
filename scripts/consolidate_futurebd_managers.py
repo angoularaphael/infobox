@@ -21,7 +21,10 @@ FIELDS = (
     "role",
     "pays_recherche",
     "localisation",
+    "url_profil",
 )
+
+SANS_CONTACT_CSV = FUTUREBD / "managers_sans_contact.csv"
 
 
 def normalize_email(value: str) -> str:
@@ -71,6 +74,8 @@ def read_boxrec_csv(path: Path) -> list[dict[str, str]]:
     reader = csv.DictReader(lines[start:], delimiter=";", quotechar='"')
     for raw in reader:
         row = {field: (raw.get(field) or "").strip() for field in FIELDS}
+        if not row["url_profil"]:
+            row["url_profil"] = (raw.get("profile_url") or "").strip()
         if row["nom"]:
             rows.append(row)
     return rows
@@ -105,13 +110,30 @@ def dedupe_rows(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
     return unique, duplicates
 
 
-def write_csv(rows: list[dict[str, str]]) -> None:
-    with OUTPUT_CSV.open("w", encoding="utf-8-sig", newline="") as handle:
+def write_csv(rows: list[dict[str, str]], path: Path = OUTPUT_CSV) -> None:
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
         handle.write("sep=;\n")
         writer = csv.writer(handle, delimiter=";", quoting=csv.QUOTE_ALL)
         writer.writerow(FIELDS)
         for row in rows:
             writer.writerow([row[field] for field in FIELDS])
+
+
+def write_sans_contact_csv(rows: list[dict[str, str]]) -> None:
+    sans_fields = ("nom", "adresse", "localisation", "url_profil")
+    with SANS_CONTACT_CSV.open("w", encoding="utf-8-sig", newline="") as handle:
+        handle.write("sep=;\n")
+        writer = csv.writer(handle, delimiter=";", quoting=csv.QUOTE_ALL)
+        writer.writerow(sans_fields)
+        for row in rows:
+            writer.writerow(
+                [
+                    row["nom"],
+                    row["adresse"] or row["localisation"],
+                    row["localisation"],
+                    row["url_profil"],
+                ]
+            )
 
 
 def md_field(value: str) -> str:
@@ -167,6 +189,7 @@ def main() -> None:
         if p.name not in {OUTPUT_CSV.name, "managers_final.csv"}
     )
     all_rows: list[dict[str, str]] = []
+    sans_contact_rows: list[dict[str, str]] = []
     raw_rows = 0
     no_contact = 0
 
@@ -175,6 +198,7 @@ def main() -> None:
             raw_rows += 1
             if not has_contact(row):
                 no_contact += 1
+                sans_contact_rows.append(row)
                 continue
             all_rows.append(row)
 
@@ -192,7 +216,9 @@ def main() -> None:
         else:
             phone_only += 1
 
+    sans_contact_rows.sort(key=lambda r: normalize_name(r["nom"]))
     write_csv(unique_rows)
+    write_sans_contact_csv(sans_contact_rows)
     write_md(
         unique_rows,
         {
@@ -212,6 +238,7 @@ def main() -> None:
     print(f"Doublons: {duplicates}")
     print(f"Total final: {len(unique_rows)}")
     print(f"Écrit: {OUTPUT_CSV}")
+    print(f"Écrit: {SANS_CONTACT_CSV} ({len(sans_contact_rows)} sans contact)")
     print(f"Écrit: {OUTPUT_MD}")
 
 

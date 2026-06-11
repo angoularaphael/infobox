@@ -53,10 +53,21 @@ function csvToUtf16LeBlob(text) {
 
 function exportCsvClient(people) {
   const sep = ";";
-  const headers = ["nom", "email", "telephone", "adresse", "role", "pays_recherche", "localisation"];
+  const headers = [
+    "nom",
+    "email",
+    "telephone",
+    "adresse",
+    "role",
+    "pays_recherche",
+    "localisation",
+    "url_profil",
+  ];
   const esc = (c) => `"${String(c || "").replace(/"/g, '""')}"`;
   const rows = people.map((p) =>
-    [p.name, p.email, p.phone, p.address, p.role, p.search_country, p.location].map(esc).join(sep)
+    [p.name, p.email, p.phone, p.address, p.role, p.search_country, p.location, p.profile_url]
+      .map(esc)
+      .join(sep)
   );
   const csv = "sep=" + sep + "\n" + headers.join(sep) + "\n" + rows.join("\n");
   downloadBlob(csvToUtf16LeBlob(csv), "boxrec_contacts.csv", "text/csv;charset=utf-16le");

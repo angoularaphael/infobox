@@ -52,13 +52,22 @@ def enrich_person(person: dict[str, Any], *, delay: float | None = None) -> dict
     if not name:
         return person
 
-    role = person.get("role", "boxing")
-    location = person.get("location", "")
-    queries = [
-        f'"{name}" {role} {location} email contact',
-        f'"{name}" boxing manager phone {location}',
-        f'"{name}" {location} gym contact',
-    ]
+    role = person.get("role", "manager")
+    location = person.get("location", "") or person.get("localisation", "")
+    address = (person.get("address") or person.get("adresse") or "").strip()
+    company = address.split("—")[0].strip() if "—" in address else address
+
+    queries: list[str] = []
+    if company and company != location:
+        queries.append(f'"{name}" "{company}" email contact')
+        queries.append(f'"{company}" {location} boxing contact')
+    queries.extend(
+        [
+            f'"{name}" {role} {location} email contact',
+            f'"{name}" boxing manager phone {location}',
+            f'"{name}" {location} gym contact',
+        ]
+    )
 
     blob = ""
     for q in queries:
