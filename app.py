@@ -345,6 +345,7 @@ def start_scrape():
     role = (body.get("role") or "manager").strip().lower()
     max_pages = body.get("max_pages")
     fetch_contacts = body.get("fetch_contacts", True)
+    all_countries = bool(body.get("all_countries"))
     if max_pages is not None:
         max_pages = int(max_pages)
 
@@ -372,12 +373,20 @@ def start_scrape():
 
         try:
             client = BoxRecClient()
-            people = client.scrape_role(
-                role,
-                max_pages=max_pages,
-                fetch_contacts=bool(fetch_contacts),
-                on_progress=on_progress,
-            )
+            if all_countries:
+                people = client.scrape_all_countries(
+                    role,
+                    max_pages=max_pages,
+                    fetch_contacts=bool(fetch_contacts),
+                    on_progress=on_progress,
+                )
+            else:
+                people = client.scrape_role(
+                    role,
+                    max_pages=max_pages,
+                    fetch_contacts=bool(fetch_contacts),
+                    on_progress=on_progress,
+                )
             _jobs[job_id]["people"] = people
             _jobs[job_id]["status"] = "done"
             q.put({"type": "done", "count": len(people)})

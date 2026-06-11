@@ -1,6 +1,7 @@
 """Tests unitaires légers du parseur (sans réseau)."""
 from pathlib import Path
 
+from scraper.boxrec_countries import parse_countries_from_picker_html
 from scraper.parser import (
     extract_role_from_url,
     extract_search_country_from_html,
@@ -111,6 +112,23 @@ def test_profile_roberto_live_flex_layout():
     assert "Caracas" in prof["address"]
 
 
+def test_boxrec_countries_from_picker():
+    html = """
+    <div class="scrollableresults">
+      <div data-action="click->locationpicker#optionDrillDown"
+           data-display="France" data-value="FR_5016" data-level="country"></div>
+      <div data-action="click->locationpicker#optionDrillDown"
+           data-display="Grenada" data-value="GD_" data-level="country"></div>
+      <div data-action="click->locationpicker#optionDrillDown"
+           data-display="Back" data-value=""></div>
+    </div>
+    """
+    countries = parse_countries_from_picker_html(html)
+    labels = [c["label"] for c in countries]
+    assert labels == ["France", "Grenada"]
+    assert countries[0]["address_id"] == "FR_5016|||||France"
+
+
 if __name__ == "__main__":
     test_list_page()
     test_profile_page()
@@ -123,4 +141,5 @@ if __name__ == "__main__":
     test_search_country_from_html()
     test_profile_roberto_andueza()
     test_profile_roberto_live_flex_layout()
+    test_boxrec_countries_from_picker()
     print("OK — parseur")

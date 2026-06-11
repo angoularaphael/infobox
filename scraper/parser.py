@@ -229,6 +229,26 @@ def is_login_page(html: str) -> bool:
     )
 
 
+def is_challenge_page(html: str) -> bool:
+    """Page reCAPTCHA / anti-bot (pas une vraie page liste ou profil)."""
+    if not html or is_login_page(html):
+        return False
+    lowered = html.lower()
+    markers = (
+        "g-recaptcha",
+        "google.com/recaptcha",
+        "grecaptcha",
+        "h-captcha",
+        "cf-challenge",
+        "challenge-platform",
+        "verify you are human",
+        "unusual traffic",
+        "just a moment",
+        "attention required",
+    )
+    return any(m in lowered for m in markers)
+
+
 def extract_login_form_data(html: str) -> dict[str, str]:
     """Extrait le jeton CSRF et l'URL d'action du formulaire de connexion BoxRec."""
     soup = BeautifulSoup(html, "html.parser")

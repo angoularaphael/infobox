@@ -1,6 +1,6 @@
 /**
  * Favori InfoBox — boxrec.com (utilisateur connecté).
- * v3.4 — profils flex-row (phones/email) + listes humanContainer
+ * v3.6 — pays BoxRec via LocationPicker (liste complète du site)
  */
 const EMAIL_LABELS = ["email", "e-mail", "courriel", "mail"];
 const PHONE_LABELS = [
@@ -393,6 +393,73 @@ function isLoginHtml(html) {
   );
 }
 
+const CHALLENGE_HTML_RE =
+  /g-recaptcha|google\.com\/recaptcha|grecaptcha|h-captcha|cf-challenge|challenge-platform|data-sitekey|verify you are human|unusual traffic|just a moment|attention required|robot check|are you a robot/i;
+
+function isChallengeHtml(html) {
+  if (!html || html.length < 80) return false;
+  if (isLoginHtml(html)) return false;
+  return CHALLENGE_HTML_RE.test(html);
+}
+
+function isChallengeDocument(doc) {
+  if (!doc || !doc.body) return false;
+  if (doc.querySelector('iframe[src*="recaptcha"], iframe[src*="challenges.cloudflare"]')) {
+    return true;
+  }
+  const html = doc.body.innerHTML || "";
+  return isChallengeHtml(html);
+}
+
+function markCaptchaMode() {
+  window.__infoboxCaptchaMode = true;
+}
+
+function promptCaptchaResolved(message, pageUrl) {
+  return new Promise((resolve) => {
+    infoboxProgressShow(
+      "reCAPTCHA BoxRec",
+      (message || "Résolvez la vérification sur BoxRec, puis continuez.") +
+        "\n\nLes requêtes automatiques reprendront via l’onglet (pas en arrière-plan).",
+      { showStop: true }
+    );
+    const actions = document.getElementById("infobox-progress-actions");
+    if (!actions) {
+      setTimeout(resolve, 8000);
+      return;
+    }
+    actions.innerHTML = "";
+    if (pageUrl) {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.textContent = "Ouvrir la page dans cet onglet";
+      open.style.cssText =
+        "cursor:pointer;display:block;width:100%;margin-bottom:0.65rem;padding:0.55rem 1rem;font-size:0.9rem;font-weight:600;border:2px solid #2563eb;background:#fff;color:#1d4ed8;border-radius:8px";
+      open.addEventListener("click", () => {
+        window.open(pageUrl, "_blank", "noopener");
+      });
+      actions.appendChild(open);
+    }
+    const cont = document.createElement("button");
+    cont.type = "button";
+    cont.textContent = "J’ai résolu — Continuer";
+    cont.style.cssText =
+      "cursor:pointer;display:block;width:100%;margin-bottom:0.5rem;padding:0.55rem 1rem;font-size:0.95rem;font-weight:700;border:0;background:#2563eb;color:#fff;border-radius:8px";
+    cont.addEventListener("click", () => resolve());
+    actions.appendChild(cont);
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.textContent = "Arrêter la collecte";
+    stop.style.cssText =
+      "cursor:pointer;display:block;width:100%;padding:0.5rem 1rem;font-size:0.9rem;font-weight:600;border:2px solid #94a3b8;background:#fff;color:#475569;border-radius:8px";
+    stop.addEventListener("click", () => {
+      infoboxRequestCancel();
+      resolve();
+    });
+    actions.appendChild(stop);
+  });
+}
+
 function applyContactFieldsToPerson(person, found) {
   if (found.email) person.email = found.email;
   if (found.phone) person.phone = found.phone;
@@ -426,6 +493,7 @@ function extractContactsFromHtml(html, person) {
 }
 
 async function fetchProfileHtml(url) {
+  if (window.__infoboxCaptchaMode) return null;
   const opts = {
     credentials: "include",
     cache: "no-store",
@@ -435,15 +503,32 @@ async function fetchProfileHtml(url) {
       Referer: location.href,
     },
   };
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (infoboxCancelled()) return null;
     try {
       const res = await fetch(url, opts);
+      if (res.status === 403 || res.status === 429) {
+        markCaptchaMode();
+        await promptCaptchaResolved(
+          "BoxRec limite les requêtes. Résolvez le reCAPTCHA si affiché.",
+          url
+        );
+        return null;
+      }
       if (!res.ok) {
         await new Promise((r) => setTimeout(r, PROFILE_RETRY_DELAY_MS));
         continue;
       }
       const html = await res.text();
-      if (isLoginHtml(html) && attempt < 2) {
+      if (isChallengeHtml(html)) {
+        markCaptchaMode();
+        await promptCaptchaResolved(
+          "reCAPTCHA détecté sur une fiche profil. Résolvez-le sur BoxRec.",
+          url
+        );
+        return null;
+      }
+      if (isLoginHtml(html) && attempt < 4) {
         await new Promise((r) => setTimeout(r, PROFILE_RETRY_DELAY_MS));
         continue;
       }
@@ -499,11 +584,12 @@ function enrichOneProfileIframe(person) {
 
 async function enrichOneProfile(person, { useIframe = false } = {}) {
   if (!person.profile_url) return;
-  if (!useIframe) {
+  const iframeFirst = useIframe || !!window.__infoboxCaptchaMode;
+  if (!iframeFirst) {
     const html = await fetchProfileHtml(person.profile_url);
     if (html) extractContactsFromHtml(html, person);
   }
-  if (useIframe || !person.email || !person.phone) {
+  if (iframeFirst || !person.email || !person.phone) {
     await enrichOneProfileIframe(person);
   }
 }
@@ -669,13 +755,26 @@ function hasListPageContent(doc) {
 }
 
 async function waitForListContent(doc, maxMs = 10000) {
+  if (isChallengeDocument(doc)) {
+    markCaptchaMode();
+    await promptCaptchaResolved(
+      "BoxRec affiche une vérification (reCAPTCHA). Complétez-la sur cette page."
+    );
+    await new Promise((r) => setTimeout(r, 600));
+  }
   const step = 350;
   for (let elapsed = 0; elapsed < maxMs; elapsed += step) {
+    if (isChallengeDocument(doc)) {
+      markCaptchaMode();
+      await promptCaptchaResolved("La liste n’apparaît pas tant que le reCAPTCHA n’est pas résolu.");
+      elapsed = 0;
+      continue;
+    }
     if (hasListPageContent(doc)) return true;
     if (extractListFromDoc(doc, "manager", "").length > 0) return true;
     await new Promise((r) => setTimeout(r, step));
   }
-  return hasListPageContent(doc);
+  return hasListPageContent(doc) && !isChallengeDocument(doc);
 }
 
 function extractRowLocation(tds, headers, linkTd) {
@@ -921,16 +1020,15 @@ function listBaseUrlFromPage() {
   return u.toString();
 }
 
-function gatherAllListUrls() {
-  const base = listBaseUrlFromPage();
+function gatherAllListUrlsFrom(doc, base) {
   const baseKey = listSearchKey(base);
   const urls = new Set([base]);
   const role = getRoleFromUrl(base);
   const searchCountry = getSearchCountryFromUrl(base);
-  const onPage = extractListFromDoc(document, role, searchCountry).length;
+  const onPage = extractListFromDoc(doc, role, searchCountry).length;
   const pageSize = Math.max(onPage || 0, 12, 20);
 
-  document.querySelectorAll('a[href*="offset="]').forEach((a) => {
+  doc.querySelectorAll('a[href*="offset="]').forEach((a) => {
     try {
       const full = new URL(a.href || a.getAttribute("href"), base).href.replace(/#.*$/, "");
       if (isListPaginationLink(full, base) || listSearchKey(full) === baseKey) urls.add(full);
@@ -939,7 +1037,7 @@ function gatherAllListUrls() {
     }
   });
 
-  const total = parseTotalPeople(document);
+  const total = parseTotalPeople(doc);
   if (total && pageSize > 0) {
     const maxPages = Math.min(Math.ceil(total / pageSize), 40);
     for (let p = 0; p < maxPages; p++) {
@@ -955,47 +1053,89 @@ function gatherAllListUrls() {
   return sorted;
 }
 
+function gatherAllListUrls() {
+  return gatherAllListUrlsFrom(document, listBaseUrlFromPage());
+}
+
 async function fetchPageDoc(url) {
   const same =
     url.replace(/#.*$/, "") === location.href.replace(/#.*$/, "") &&
     getOffsetFromUrl(url) === getOffsetFromUrl(location.href);
-  if (same) return document;
-  const res = await fetch(url, { credentials: "include" });
-  if (!res.ok) return null;
-  return new DOMParser().parseFromString(await res.text(), "text/html");
+  if (same) {
+    if (isChallengeDocument(document)) {
+      markCaptchaMode();
+      await promptCaptchaResolved("reCAPTCHA sur la page actuelle — résolvez-le puis continuez.", url);
+    }
+    return document;
+  }
+  const opts = { credentials: "include", cache: "no-store" };
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (infoboxCancelled()) return null;
+    try {
+      const res = await fetch(url, opts);
+      if (res.status === 403 || res.status === 429) {
+        markCaptchaMode();
+        await promptCaptchaResolved(
+          "BoxRec bloque la lecture des pages liste. Résolvez le reCAPTCHA.",
+          url
+        );
+        continue;
+      }
+      if (!res.ok) return null;
+      const html = await res.text();
+      if (isChallengeHtml(html)) {
+        markCaptchaMode();
+        await promptCaptchaResolved(
+          "reCAPTCHA sur une page liste. Ouvrez-la dans cet onglet et validez.",
+          url
+        );
+        continue;
+      }
+      if (isLoginHtml(html) && attempt < 4) {
+        await new Promise((r) => setTimeout(r, PROFILE_RETRY_DELAY_MS));
+        continue;
+      }
+      return new DOMParser().parseFromString(html, "text/html");
+    } catch (_) {
+      await new Promise((r) => setTimeout(r, PROFILE_RETRY_DELAY_MS));
+    }
+  }
+  return null;
 }
 
-async function collectAllListPages(role, searchCountry) {
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const base = listBaseUrlFromPage();
+async function collectAllListPagesForBase(base, role, searchCountry, seedDoc) {
   const byProfile = new Map();
-  const urls = gatherAllListUrls();
-  const total = parseTotalPeople(document);
+  const firstDoc = seedDoc || (await fetchPageDoc(base));
+  if (!firstDoc) return [];
+  const urls = gatherAllListUrlsFrom(firstDoc, base);
+  const total = parseTotalPeople(firstDoc);
   const countryLabel = searchCountry ? ` — ${searchCountry}` : "";
 
   infoboxProgressShow(
-    `Liste — ${urls.length} page(s) à lire`,
-    total ? `Environ ${total} contacts${countryLabel}` : `Collecte des noms${countryLabel}`
+    `Liste${countryLabel} — ${urls.length} page(s)`,
+    total ? `Environ ${total} contacts` : "Collecte des noms…"
   );
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise((r) => setTimeout(r, 250));
 
   for (let i = 0; i < urls.length; i++) {
     if (infoboxCancelled()) break;
     infoboxProgressShow(
-      `Page liste ${i + 1} / ${urls.length}`,
-      `Lecture des noms sur BoxRec${countryLabel}…`
+      `Page liste ${i + 1} / ${urls.length}${countryLabel}`,
+      "Lecture des noms sur BoxRec…"
     );
     document.title = `InfoBox ${i + 1}/${urls.length}…`;
-    const doc = await fetchPageDoc(urls[i]);
+    const doc =
+      i === 0 && firstDoc
+        ? firstDoc
+        : await fetchPageDoc(urls[i]);
     if (!doc) continue;
     extractListFromDoc(doc, role, searchCountry).forEach((p) => byProfile.set(p.profile_url, p));
     if (i < urls.length - 1 && !(await waitCancellable(900))) break;
   }
-  document.title = document.title.replace(/^InfoBox.*/, "BoxRec");
 
   const count = byProfile.size;
   if (total && count < total * 0.5) {
-    const pageSize = extractListFromDoc(document, role, searchCountry).length || 20;
+    const pageSize = extractListFromDoc(firstDoc, role, searchCountry).length || 20;
     for (let off = 0; off < total; off += pageSize) {
       if (infoboxCancelled()) break;
       const doc = await fetchPageDoc(urlWithOffset(base, off));
@@ -1008,24 +1148,219 @@ async function collectAllListPages(role, searchCountry) {
   return [...byProfile.values()];
 }
 
+async function collectAllListPages(role, searchCountry) {
+  const base = listBaseUrlFromPage();
+  const people = await collectAllListPagesForBase(base, role, searchCountry, document);
+  document.title = document.title.replace(/^InfoBox.*/, "BoxRec");
+  return people;
+}
+
+function decodeHtmlJsonAttr(value) {
+  if (!value) return null;
+  const ta = document.createElement("textarea");
+  ta.innerHTML = value;
+  try {
+    return JSON.parse(ta.value);
+  } catch (_) {
+    try {
+      return JSON.parse(value);
+    } catch (e2) {
+      return null;
+    }
+  }
+}
+
+function extractLocationPickerProps(doc) {
+  const el = doc.querySelector('[data-live-name-value="LocationPicker"]');
+  if (!el) return null;
+  return decodeHtmlJsonAttr(el.getAttribute("data-live-props-value"));
+}
+
+function parseCountriesFromPickerHtml(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const countries = [];
+  const seen = new Set();
+  const skip = /^(back|worldwide|all locations?)$/i;
+  doc
+    .querySelectorAll(
+      '[data-action*="locationpicker#optionDrillDown"], [data-action*="locationpicker#optionSelect"]'
+    )
+    .forEach((el) => {
+      const display = (el.dataset.display || el.textContent || "").replace(/\s+/g, " ").trim();
+      if (!display || skip.test(display)) return;
+      const level = (el.dataset.level || "").trim().toLowerCase();
+      if (level && !["", "country", "c", "nation"].includes(level)) return;
+      const key = display.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      const value = (el.dataset.value || "").trim();
+      const addressId = value ? `${value}|||||${display}` : `|||||${display}`;
+      countries.push({ label: display, addressId });
+    });
+  return countries.sort((a, b) => a.label.localeCompare(b.label, "en"));
+}
+
+async function requestLocationPicker(props, updated, refererUrl) {
+  const formData = new FormData();
+  formData.append("data", JSON.stringify({ props, updated }));
+  const res = await fetch("https://boxrec.com/en/_components/LocationPicker", {
+    method: "POST",
+    credentials: "include",
+    cache: "no-store",
+    headers: {
+      Accept: "application/vnd.live-component+html",
+      "X-Requested-With": "XMLHttpRequest",
+      "X-Live-Url": refererUrl || location.pathname + location.search,
+    },
+    body: formData,
+  });
+  if (res.status === 403 || res.status === 429) {
+    markCaptchaMode();
+    await promptCaptchaResolved(
+      "BoxRec bloque la lecture de la liste des pays. Résolvez le reCAPTCHA.",
+      location.href
+    );
+    throw new Error("captcha");
+  }
+  if (!res.ok) throw new Error(`LocationPicker HTTP ${res.status}`);
+  const html = await res.text();
+  if (isChallengeHtml(html)) {
+    markCaptchaMode();
+    await promptCaptchaResolved("reCAPTCHA lors du chargement des pays BoxRec.");
+    throw new Error("captcha");
+  }
+  return html;
+}
+
+async function fetchAllBoxRecCountries(doc) {
+  let props = extractLocationPickerProps(doc);
+  const referer = location.pathname + location.search;
+
+  if (!props) {
+    const res = await fetch(location.href, { credentials: "include", cache: "no-store" });
+    if (!res.ok) throw new Error("page");
+    const pageDoc = new DOMParser().parseFromString(await res.text(), "text/html");
+    props = extractLocationPickerProps(pageDoc);
+  }
+
+  if (!props || !props["@checksum"]) throw new Error("LocationPicker absent");
+
+  const pickerHtml = await requestLocationPicker(
+    props,
+    { initialLoadData: true, query: "", level: "", levelid: "", parent: "" },
+    referer
+  );
+  return parseCountriesFromPickerHtml(pickerHtml);
+}
+
+function normalizeCountrySpec(spec) {
+  if (!spec) return null;
+  if (typeof spec === "string") {
+    const label = spec.trim();
+    return label ? { label, addressId: `|||||${label}` } : null;
+  }
+  const label = String(spec.label || "").trim();
+  if (!label) return null;
+  return {
+    label,
+    addressId: spec.addressId || spec.address_id || `|||||${label}`,
+  };
+}
+
+function setCountryOnListUrl(templateUrl, countrySpec) {
+  const spec = normalizeCountrySpec(countrySpec);
+  const u = new URL(templateUrl.replace(/#.*$/, ""), "https://boxrec.com");
+  u.searchParams.delete("offset");
+  if (spec.addressId) {
+    u.searchParams.set("addressId", spec.addressId);
+    u.searchParams.delete("locations_filter[addressId]");
+  }
+  u.searchParams.set("l[loc_txt]", spec.label);
+  return u.toString();
+}
+
+async function countriesForWorldwideCollect(doc, currentCountry) {
+  infoboxProgressShow(
+    "Pays BoxRec",
+    "Chargement de la liste officielle des pays (LocationPicker)…",
+    { showStop: true }
+  );
+  let fromBoxRec = [];
+  try {
+    fromBoxRec = await fetchAllBoxRecCountries(doc);
+  } catch (err) {
+    console.warn("InfoBox: pays BoxRec", err);
+  }
+  const seen = new Set();
+  const out = [];
+  const add = (spec) => {
+    const norm = normalizeCountrySpec(spec);
+    if (!norm) return;
+    const key = norm.label.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(norm);
+  };
+  if (currentCountry) add(currentCountry);
+  fromBoxRec.forEach(add);
+  if (!fromBoxRec.length) {
+    throw new Error(
+      "Impossible de charger les pays depuis BoxRec. Restez connecté sur boxrec.com et réessayez."
+    );
+  }
+  return out;
+}
+
+async function collectWorldwideListPages(role, templateUrl, startCountry) {
+  const byProfile = new Map();
+  const countries = await countriesForWorldwideCollect(document, startCountry);
+  infoboxProgressShow(
+    "Mode monde entier",
+    `${countries.length} pays BoxRec à parcourir — cela peut prendre longtemps. Ne fermez pas l’onglet.`
+  );
+  await waitCancellable(500);
+
+  for (let ci = 0; ci < countries.length; ci++) {
+    if (infoboxCancelled()) break;
+    const country = countries[ci];
+    const base = setCountryOnListUrl(templateUrl, country);
+    infoboxProgressShow(
+      `Pays ${ci + 1} / ${countries.length}`,
+      `${country.label} — lecture des listes…`
+    );
+    document.title = `InfoBox ${country.label} (${ci + 1}/${countries.length})`;
+    const batch = await collectAllListPagesForBase(base, role, country.label);
+    batch.forEach((p) => {
+      if (!p.search_country) p.search_country = country.label;
+      byProfile.set(p.profile_url, p);
+    });
+    if (ci < countries.length - 1 && !(await waitCancellable(1100))) break;
+  }
+  document.title = document.title.replace(/^InfoBox.*/, "BoxRec");
+  return [...byProfile.values()];
+}
+
 async function enrichAllProfiles(people) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const captchaMode = !!window.__infoboxCaptchaMode;
 
-  async function runPass(labelSuffix) {
+  async function runPass(labelSuffix, useIframe) {
     for (let i = 0; i < people.length; i++) {
       if (infoboxCancelled()) break;
       const p = people[i];
       infoboxProgressShow(
         `Profils ${i + 1} / ${people.length}${labelSuffix}`,
-        `${p.name || "Contact"} — e-mails et téléphones…`
+        (captchaMode || useIframe
+          ? "Mode onglet (reCAPTCHA actif) — "
+          : "") + `${p.name || "Contact"} — e-mails et téléphones…`
       );
       document.title = `InfoBox ${i + 1}/${people.length}`;
-      await enrichOneProfile(p, { useIframe: false });
+      await enrichOneProfile(p, { useIframe: useIframe || captchaMode });
       if (i < people.length - 1 && !(await waitCancellable(PROFILE_FETCH_DELAY_MS))) break;
     }
   }
 
-  await runPass("");
+  await runPass(captchaMode ? " (onglet)" : "", captchaMode);
   if (infoboxCancelled()) return;
   const incomplete = people.filter((p) => !p.email || !p.phone);
   if (incomplete.length && !infoboxCancelled()) {
@@ -1181,6 +1516,7 @@ async function infoboxExtractFromPage() {
 
 async function infoboxExtractFromPageCore() {
   window.__infoboxCancel = false;
+  window.__infoboxCaptchaMode = false;
   if (!/boxrec\.com/i.test(location.hostname)) {
     alert("InfoBox : utilisez ce favori sur boxrec.com (page liste), pas sur InfoBox.");
     return;
@@ -1188,29 +1524,45 @@ async function infoboxExtractFromPageCore() {
   const role = getRoleFromUrl(location.href);
   let searchCountry = getSearchCountryFromUrl(location.href) || getSearchCountryFromPage(document);
 
-  infoboxProgressShow("InfoBox v3.4", "Détection de la liste BoxRec…", { showStop: false });
+  infoboxProgressShow("InfoBox v3.6", "Détection de la liste BoxRec…", { showStop: false });
   const listReady = await waitForListContent(document);
   if (!listReady) {
     infoboxProgressHide(0);
+    const captchaHint = isChallengeDocument(document)
+      ? "Un reCAPTCHA BoxRec est affiché — résolvez-le puis relancez le favori.\n\n"
+      : "";
     alert(
-      "InfoBox : liste non détectée.\n\n" +
+      captchaHint +
+        "InfoBox : liste non détectée.\n\n" +
         "Attendez que les noms s’affichent sur boxrec.com, puis relancez le favori."
     );
     return;
   }
   if (!searchCountry) searchCountry = getSearchCountryFromPage(document);
-  if (!searchCountry) {
+
+  const worldwide = confirm(
+    "Mode de collecte BoxRec\n\n" +
+      "OK = TOUS les pays BoxRec (liste officielle du site — très long)\n" +
+      "Annuler = uniquement le pays actuel" +
+      (searchCountry ? ` (${searchCountry})` : "")
+  );
+
+  if (!worldwide && !searchCountry) {
     infoboxProgressHide(0);
     alert(
       "InfoBox : pays de recherche non détecté.\n\n" +
-        "Filtrez par pays sur BoxRec (ex. Grenada, United Kingdom) puis relancez le favori."
+        "Filtrez par pays sur BoxRec (ex. Grenada, United Kingdom) ou choisissez « tous les pays »."
     );
     return;
   }
 
   infoboxProgressShow(
     "InfoBox démarré",
-    searchCountry ? `Pays : ${searchCountry} — préparation…` : "Préparation de la sauvegarde…"
+    worldwide
+      ? `Monde entier — rôle : ${role}`
+      : searchCountry
+        ? `Pays : ${searchCountry} — préparation…`
+        : "Préparation de la sauvegarde…"
   );
   if (!(await waitCancellable(400))) {
     infoboxProgressHide(0);
@@ -1221,10 +1573,29 @@ async function infoboxExtractFromPageCore() {
   const prevTitle = document.title;
   document.title = "InfoBox — collecte…";
 
-  infoboxProgressShow("Sauvegarde en cours", "Lecture de toutes les pages de la liste…");
-  let people = await collectAllListPages(role, searchCountry);
+  infoboxProgressShow(
+    "Sauvegarde en cours",
+    worldwide ? "Lecture pays par pays…" : "Lecture de toutes les pages de la liste…"
+  );
+  let people;
+  try {
+    people = worldwide
+      ? await collectWorldwideListPages(role, listBaseUrlFromPage(), searchCountry)
+      : await collectAllListPages(role, searchCountry);
+  } catch (err) {
+    document.title = prevTitle;
+    infoboxProgressHide(0);
+    alert(
+      "InfoBox : " +
+        (err && err.message
+          ? err.message
+          : "échec du chargement des pays BoxRec.")
+    );
+    return;
+  }
+  const exportCountry = worldwide ? "worldwide" : searchCountry;
   if (infoboxCancelled()) {
-    await handleCancelledExport(people, role, searchCountry, prevTitle);
+    await handleCancelledExport(people, role, exportCountry, prevTitle);
     return;
   }
   if (!people.length) {
@@ -1240,7 +1611,7 @@ async function infoboxExtractFromPageCore() {
   );
   await enrichAllProfiles(people);
   if (infoboxCancelled()) {
-    await handleCancelledExport(people, role, searchCountry, prevTitle);
+    await handleCancelledExport(people, role, exportCountry, prevTitle);
     return;
   }
 
@@ -1252,12 +1623,12 @@ async function infoboxExtractFromPageCore() {
   infoboxProgressShow("Export CSV et PDF…", "Création des fichiers sur votre ordinateur…");
   document.title = "InfoBox — export…";
   try {
-    await exportFiles(people, role, searchCountry);
+    await exportFiles(people, role, exportCountry);
   } catch (err) {
     document.title = prevTitle;
     infoboxProgressHide(0);
     alert("InfoBox : échec du PDF (" + (err && err.message ? err.message : err) + "). CSV peut être déjà téléchargé.");
-    downloadCsv(people, role, searchCountry);
+    downloadCsv(people, role, exportCountry);
     return;
   }
 
@@ -1272,8 +1643,8 @@ async function infoboxExtractFromPageCore() {
   infoboxProgressHide(6000);
   alert(
     "InfoBox — export terminé\n\n" +
-      "Pays : " +
-      searchCountry +
+      "Périmètre : " +
+      (worldwide ? "tous les pays" : searchCountry) +
       "\n" +
       people.length +
       " contacts\n" +

@@ -7,9 +7,11 @@ from typing import Any, Callable
 from urllib.parse import urlencode
 
 from scraper.http_session import create_http_session
+from scraper.boxrec_countries import fetch_countries_from_location_picker
 from scraper.parser import (
     extract_login_form_data,
     extract_search_country_from_url,
+    is_challenge_page,
     is_login_page,
     merge_profile_into_person,
     parse_list_page,
@@ -68,7 +70,13 @@ class BoxRecClient:
             )
         if resp.status_code >= 400:
             raise BoxRecError(f"Erreur HTTP {resp.status_code} pour {url}")
-        return resp.text
+        text = resp.text
+        if is_challenge_page(text):
+            raise BoxRecError(
+                "BoxRec affiche un reCAPTCHA / anti-bot. Utilisez le favori InfoBox dans votre navigateur "
+                "connecté à BoxRec, ou résolvez le défi puis réessayez."
+            )
+        return text
 
     def _post(
         self,
@@ -254,5 +262,58 @@ class BoxRecClient:
             if next_offset is None or next_offset <= offset:
                 break
             offset = int(next_offset)
+
+        return all_people
+
+    def list_boxrec_countries(self) -> list[dict[str, str]]:
+        """Liste officielle des pays depuis le LocationPicker BoxRec."""
+        if self.username and self.password:
+            self.login()
+        return fetch_countries_from_location_picker(self.session)
+
+    def scrape_all_countries(
+        self,
+        role: str,
+        countries: list[dict[str, str]] | None = None,
+        max_pages: int | None = None,
+        fetch_contacts: bool = True,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> list[dict[str, str]]:
+        """Parcourt tous les pays BoxRec (LocationPicker) pour un même rôle."""
+        if self.username and self.password:
+            self.login()
+
+        targets = countries or self.list_boxrec_countries()
+        if not targets:
+            raise BoxRecError(
+                "Impossible de charger la liste des pays BoxRec. Connectez-vous ou utilisez le favori."
+            )
+
+        all_people: list[dict[str, str]] = []
+        seen_ids: set[str] = set()
+        original_loc = self.loc_txt
+
+        try:
+            for entry in targets:
+                label = entry.get("label") or entry.get("name") or ""
+                if not label:
+                    continue
+                self.loc_txt = label
+                batch = self.scrape_role(
+                    role,
+                    max_pages=max_pages,
+                    fetch_contacts=fetch_contacts,
+                    on_progress=on_progress,
+                )
+                for person in batch:
+                    pid = person.get("id") or person.get("profile_url", "")
+                    if pid in seen_ids:
+                        continue
+                    seen_ids.add(pid)
+                    if not person.get("search_country"):
+                        person["search_country"] = label
+                    all_people.append(person)
+        finally:
+            self.loc_txt = original_loc
 
         return all_people
