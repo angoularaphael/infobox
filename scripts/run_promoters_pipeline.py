@@ -46,16 +46,30 @@ def main() -> int:
                 sys.executable,
                 str(ROOT / "scripts" / "scrape_promoters_boxrec.py"),
                 "--max-minutes",
-                str(scrape_budget),
+                str(min(3.0, scrape_budget)),
                 "--max-pages",
-                "4",
+                "2",
                 "--delay",
                 "1.0",
             ]
         )
-        if code != 0 and not list(FUTUREBD.glob("boxrec_promoter_*.csv")):
-            print("Scrape échoué et aucun CSV promoteur.", file=sys.stderr)
-            return code
+        has_csv = bool(list(FUTUREBD.glob("boxrec_promoter_*.csv"))) or (FUTUREBD / "promoteurs_liste_brute.csv").is_file()
+        if code != 0 or not has_csv:
+            print("BoxRec indisponible — repli collecte web (DuckDuckGo).", flush=True)
+            web_budget = scrape_budget if code != 0 else min(scrape_budget, 8.0)
+            code = run_step(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "collect_promoters_web_search.py"),
+                    "--max-minutes",
+                    str(web_budget),
+                    "--delay",
+                    "1.5",
+                ]
+            )
+            if code != 0:
+                print("Collecte web échouée.", file=sys.stderr)
+                return code
 
     if args.skip_enrich:
         print("Enrichissement ignoré (--skip-enrich).")

@@ -147,6 +147,8 @@ def load_rows_from_futurebd() -> list[dict[str, str]]:
     paths = sorted(FUTUREBD.glob("boxrec_promoter_*.csv"))
     if not paths:
         paths = sorted(FUTUREBD.glob("boxrec_*promoter*.csv"))
+    if not paths and (FUTUREBD / "promoteurs_liste_brute.csv").is_file():
+        paths = [FUTUREBD / "promoteurs_liste_brute.csv"]
     if not paths:
         return []
 
