@@ -353,17 +353,20 @@ def main() -> None:
         print(f"Budget temps : {args.max_minutes:.1f} min\n")
 
     def on_progress(current: int, total: int, result: dict[str, str]) -> None:
-        status = "OK" if result["enrichi"] == "oui" else "—"
+        status = "OK" if result["enrichi"] == "oui" else "-"
         bits = []
         if result["email"]:
             bits.append(result["email"][:36])
         if result["telephone"]:
             bits.append(result["telephone"][:18])
         extra = " | ".join(bits)
-        print(f"[{current}/{total}] {status} {result['nom'][:44]}", end="")
+        line = f"[{current}/{total}] {status} {result['nom'][:44]}"
         if extra:
-            print(f" -> {extra}", end="")
-        print(flush=True)
+            line += f" -> {extra}"
+        try:
+            print(line, flush=True)
+        except UnicodeEncodeError:
+            print(line.encode("ascii", errors="replace").decode("ascii"), flush=True)
 
     results = enrich_rows(
         rows,
