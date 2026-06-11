@@ -415,24 +415,44 @@ function markCaptchaMode() {
   window.__infoboxCaptchaMode = true;
 }
 
+function captchaLooksResolved() {
+  if (isChallengeDocument(document)) return false;
+  return hasListPageContent(document) || !isChallengeHtml(document.documentElement?.outerHTML || "");
+}
+
 function promptCaptchaResolved(message, pageUrl) {
   return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearInterval(pollTimer);
+      resolve();
+    };
+
     infoboxProgressShow(
       "reCAPTCHA BoxRec",
       (message || "Résolvez la vérification sur BoxRec, puis continuez.") +
-        "\n\nLes requêtes automatiques reprendront via l’onglet (pas en arrière-plan).",
+        "\n\nQuand c’est fait : cliquez « Continuer » ci-dessous (détection auto si la liste réapparaît).",
       { showStop: true }
     );
     const actions = document.getElementById("infobox-progress-actions");
     if (!actions) {
-      setTimeout(resolve, 8000);
+      setTimeout(finish, 8000);
       return;
     }
     actions.innerHTML = "";
+    const cont = document.createElement("button");
+    cont.type = "button";
+    cont.textContent = "J’ai résolu — Continuer";
+    cont.style.cssText =
+      "cursor:pointer;display:block;width:100%;margin-bottom:0.5rem;padding:0.65rem 1rem;font-size:1rem;font-weight:700;border:0;background:#2563eb;color:#fff;border-radius:8px";
+    cont.addEventListener("click", finish);
+    actions.appendChild(cont);
     if (pageUrl) {
       const open = document.createElement("button");
       open.type = "button";
-      open.textContent = "Ouvrir la page dans cet onglet";
+      open.textContent = "Ouvrir la page bloquée (nouvel onglet)";
       open.style.cssText =
         "cursor:pointer;display:block;width:100%;margin-bottom:0.65rem;padding:0.55rem 1rem;font-size:0.9rem;font-weight:600;border:2px solid #2563eb;background:#fff;color:#1d4ed8;border-radius:8px";
       open.addEventListener("click", () => {
@@ -440,13 +460,6 @@ function promptCaptchaResolved(message, pageUrl) {
       });
       actions.appendChild(open);
     }
-    const cont = document.createElement("button");
-    cont.type = "button";
-    cont.textContent = "J’ai résolu — Continuer";
-    cont.style.cssText =
-      "cursor:pointer;display:block;width:100%;margin-bottom:0.5rem;padding:0.55rem 1rem;font-size:0.95rem;font-weight:700;border:0;background:#2563eb;color:#fff;border-radius:8px";
-    cont.addEventListener("click", () => resolve());
-    actions.appendChild(cont);
     const stop = document.createElement("button");
     stop.type = "button";
     stop.textContent = "Arrêter la collecte";
@@ -454,9 +467,21 @@ function promptCaptchaResolved(message, pageUrl) {
       "cursor:pointer;display:block;width:100%;padding:0.5rem 1rem;font-size:0.9rem;font-weight:600;border:2px solid #94a3b8;background:#fff;color:#475569;border-radius:8px";
     stop.addEventListener("click", () => {
       infoboxRequestCancel();
-      resolve();
+      finish();
     });
     actions.appendChild(stop);
+
+    const pollTimer = setInterval(() => {
+      if (infoboxCancelled()) {
+        finish();
+        return;
+      }
+      if (captchaLooksResolved()) {
+        const sub = document.getElementById("infobox-progress-sub");
+        if (sub) sub.textContent = "reCAPTCHA validé — reprise de la collecte…";
+        setTimeout(finish, 600);
+      }
+    }, 1500);
   });
 }
 
@@ -1076,9 +1101,14 @@ async function fetchPageDoc(url) {
       if (res.status === 403 || res.status === 429) {
         markCaptchaMode();
         await promptCaptchaResolved(
-          "BoxRec bloque la lecture des pages liste. Résolvez le reCAPTCHA.",
+          "BoxRec bloque la lecture des pages liste. Résolvez le reCAPTCHA sur cette page BoxRec.",
           url
         );
+        await new Promise((r) => setTimeout(r, 800));
+        const sameAfter =
+          url.replace(/#.*$/, "") === location.href.replace(/#.*$/, "") &&
+          getOffsetFromUrl(url) === getOffsetFromUrl(location.href);
+        if (sameAfter && captchaLooksResolved()) return document;
         continue;
       }
       if (!res.ok) return null;
