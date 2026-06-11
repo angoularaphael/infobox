@@ -53,7 +53,7 @@ Sources : `managers_contacts_sans_doublons.csv` + `managers_enrichis.csv` (enric
 
 1. Créer un compte sur [Brevo](https://www.brevo.com/)  
 2. **SMTP & API → Clés API** → créer une clé  
-3. Vérifier l’expéditeur `boxingcenter31@gmail.com` (ou domaine)  
+3. Vérifier l’expéditeur `suzinabot@11426075.brevosend.com` (domaine Brevo)  
 4. Noter la clé pour `BREVO_API_KEY`
 
 ---
@@ -116,7 +116,7 @@ BOXING_CENTER_SITE_URL=https://boxingcenter.fr/
 
 # Brevo
 BREVO_API_KEY=votre_cle_brevo
-BREVO_SENDER_EMAIL=boxingcenter31@gmail.com
+BREVO_SENDER_EMAIL=suzinabot@11426075.brevosend.com
 BREVO_SENDER_NAME=Boxing Center
 
 # Si le site gestion-manager est sur un autre domaine (Vercel)
