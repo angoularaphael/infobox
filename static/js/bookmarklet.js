@@ -1,6 +1,6 @@
 /**
  * Favori InfoBox — boxrec.com (utilisateur connecté).
- * v3.9 — erreur BoxRec TSB1, pauses anti-limite, captcha masquable
+ * v3.10 — overlay captcha fiable (boutons Masquer / Continuer)
  */
 const EMAIL_LABELS = ["email", "e-mail", "courriel", "mail"];
 const PHONE_LABELS = [
@@ -348,27 +348,36 @@ async function waitCancellable(ms) {
   return !infoboxCancelled();
 }
 
+function infoboxProgressEnsureShell() {
+  let root = document.getElementById("infobox-progress");
+  const m = document.getElementById("infobox-progress-msg");
+  const actions = document.getElementById("infobox-progress-actions");
+  const sub = document.getElementById("infobox-progress-sub");
+  const overlay = document.getElementById("infobox-progress-overlay");
+  if (root && m && actions && sub && overlay) return root;
+  if (root) root.remove();
+  root = document.createElement("div");
+  root.id = "infobox-progress";
+  root.innerHTML =
+    '<div id="infobox-progress-overlay" class="infobox-overlay" style="position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,0.78);display:flex;align-items:center;justify-content:center;padding:0.75rem;font-family:Segoe UI,system-ui,sans-serif">' +
+    '<div id="infobox-progress-card" style="background:#fff;padding:1.25rem 1.5rem;border-radius:12px;max-width:24rem;width:100%;text-align:center;border:2px solid #2563eb;box-shadow:0 16px 48px rgba(37,99,235,0.25);display:flex;flex-direction:column;max-height:min(92vh,560px);overflow:hidden">' +
+    '<div style="font-size:1.2rem;font-weight:700;color:#1d4ed8;margin-bottom:0.5rem;flex-shrink:0">InfoBox</div>' +
+    '<div id="infobox-progress-msg" style="font-size:0.98rem;color:#1c1917;font-weight:600;flex-shrink:0"></div>' +
+    '<div id="infobox-progress-sub" style="font-size:0.85rem;color:#57534e;margin-top:0.65rem;line-height:1.4;text-align:left;overflow-y:auto;flex:1;min-height:0"></div>' +
+    '<div id="infobox-progress-actions" style="margin-top:0.85rem;flex-shrink:0;width:100%"></div>' +
+    "</div></div>";
+  document.body.appendChild(root);
+  return root;
+}
+
 function infoboxProgressShow(msg, sub, options) {
   const showStop = !options || options.showStop !== false;
-  let root = document.getElementById("infobox-progress");
-  let m = document.getElementById("infobox-progress-msg");
-  if (!root || !m) {
-    if (root) root.remove();
-    root = document.createElement("div");
-    root.id = "infobox-progress";
-    root.innerHTML =
-      '<div id="infobox-progress-overlay" class="infobox-overlay" style="position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,0.78);display:flex;align-items:center;justify-content:center;padding:0.75rem;font-family:Segoe UI,system-ui,sans-serif">' +
-      '<div id="infobox-progress-card" style="background:#fff;padding:1.25rem 1.5rem;border-radius:12px;max-width:24rem;width:100%;text-align:center;border:2px solid #2563eb;box-shadow:0 16px 48px rgba(37,99,235,0.25);display:flex;flex-direction:column;max-height:min(92vh,560px)">' +
-      '<div style="font-size:1.2rem;font-weight:700;color:#1d4ed8;margin-bottom:0.5rem;flex-shrink:0">InfoBox</div>' +
-      '<div id="infobox-progress-msg" style="font-size:0.98rem;color:#1c1917;font-weight:600;flex-shrink:0"></div>' +
-      '<div id="infobox-progress-actions" style="margin-top:0.85rem;flex-shrink:0"></div>' +
-      '<div id="infobox-progress-sub" style="font-size:0.85rem;color:#57534e;margin-top:0.65rem;line-height:1.4;text-align:left;overflow-y:auto;flex:1;min-height:0"></div>' +
-      "</div></div>";
-    document.body.appendChild(root);
-    m = document.getElementById("infobox-progress-msg");
-  }
+  infoboxProgressEnsureShell();
+  const m = document.getElementById("infobox-progress-msg");
   const s = document.getElementById("infobox-progress-sub");
   const actions = document.getElementById("infobox-progress-actions");
+  const overlay = document.getElementById("infobox-progress-overlay");
+  if (overlay) overlay.style.display = "flex";
   if (m) m.textContent = msg;
   if (s) s.textContent = sub || "Ne fermez pas cet onglet BoxRec.";
   if (actions) {
@@ -616,6 +625,7 @@ function promptCaptchaResolved(message, pageUrl) {
       message || "BoxRec demande une vérification anti-robot.",
       { showStop: false, preserveActions: true }
     );
+    infoboxProgressEnsureShell();
     const actions = document.getElementById("infobox-progress-actions");
     const sub = document.getElementById("infobox-progress-sub");
     if (sub) {
@@ -629,14 +639,15 @@ function promptCaptchaResolved(message, pageUrl) {
           "3. Cliquez « Continuer » — détection automatique toutes les 2 s.";
     }
     if (!actions) {
-      setTimeout(finish, 8000);
+      finish();
       return;
     }
     actions.innerHTML = "";
+    actions.style.display = "block";
 
     const hide = document.createElement("button");
     hide.type = "button";
-    hide.textContent = "Masquer InfoBox — résoudre le captcha";
+    hide.textContent = "Masquer InfoBox";
     hide.style.cssText =
       "cursor:pointer;display:block;width:100%;margin-bottom:0.5rem;padding:0.7rem 1rem;font-size:0.95rem;font-weight:700;border:0;background:#16a34a;color:#fff;border-radius:8px";
     hide.addEventListener("click", () => {
@@ -720,13 +731,7 @@ function promptCaptchaResolved(message, pageUrl) {
       })();
     }, 2000);
 
-    setTimeout(() => {
-      if (done) return;
-      const overlay = document.getElementById("infobox-progress-overlay");
-      if (overlay && overlay.style.display !== "none") {
-        infoboxCaptchaMinimize({ onContinue: () => tryContinue(true) });
-      }
-    }, 1500);
+    /* pas de masquage auto : l'utilisateur clique « Masquer InfoBox » */
   });
 }
 
@@ -1812,7 +1817,7 @@ async function infoboxExtractFromPageCore() {
   const role = getRoleFromUrl(location.href);
   let searchCountry = getSearchCountryFromUrl(location.href) || getSearchCountryFromPage(document);
 
-  infoboxProgressShow("InfoBox v3.9", "Détection de la liste BoxRec…", { showStop: false });
+  infoboxProgressShow("InfoBox v3.10", "Détection de la liste BoxRec…", { showStop: false });
   if (isBoxRecErrorDocument(document)) {
     markBoxRecThrottle();
     await promptBoxRecBlocked(
