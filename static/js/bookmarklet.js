@@ -1,6 +1,6 @@
 /**
  * Favori InfoBox — boxrec.com (utilisateur connecté).
- * v3.6 — pays BoxRec via LocationPicker (liste complète du site)
+ * v3.7 — reCAPTCHA : détection réseau + badge ignoré après validation
  */
 const EMAIL_LABELS = ["email", "e-mail", "courriel", "mail"];
 const PHONE_LABELS = [
@@ -358,7 +358,9 @@ function infoboxProgressShow(msg, sub, options) {
   if (m) m.textContent = msg;
   if (s) s.textContent = sub || "Ne fermez pas cet onglet BoxRec.";
   if (actions) {
-    if (showStop && !infoboxCancelled()) {
+    if (options && options.preserveActions) {
+      /* boutons captcha gérés par promptCaptchaResolved */
+    } else if (showStop && !infoboxCancelled()) {
       actions.innerHTML =
         '<button type="button" id="infobox-progress-stop" style="cursor:pointer;padding:0.55rem 1.25rem;font-size:0.95rem;font-weight:600;border:2px solid #2563eb;background:#fff;color:#1d4ed8;border-radius:8px">Arrêter la collecte</button>';
       const stopBtn = document.getElementById("infobox-progress-stop");
@@ -403,38 +405,110 @@ function isChallengeHtml(html) {
 }
 
 function isChallengeDocument(doc) {
+  return isActiveChallengeDocument(doc);
+}
+
+/** Blocage actif (pas le simple badge reCAPTCHA laissé après validation). */
+function isActiveChallengeDocument(doc) {
   if (!doc || !doc.body) return false;
-  if (doc.querySelector('iframe[src*="recaptcha"], iframe[src*="challenges.cloudflare"]')) {
-    return true;
+  if (hasListPageContent(doc) && countProfileLinks(doc) >= 2) return false;
+
+  const view = doc.defaultView;
+  for (const frame of doc.querySelectorAll('iframe[src*="recaptcha"]')) {
+    const src = frame.getAttribute("src") || "";
+    if (!/api2\/bframe|enterprise\/bframe|\/anchor/.test(src)) continue;
+    const rect = frame.getBoundingClientRect();
+    const style = view?.getComputedStyle(frame);
+    if (
+      rect.width > 80 &&
+      rect.height > 80 &&
+      style?.visibility !== "hidden" &&
+      style?.display !== "none" &&
+      style?.opacity !== "0"
+    ) {
+      return true;
+    }
   }
+
+  for (const frame of doc.querySelectorAll('iframe[src*="challenges.cloudflare"]')) {
+    const rect = frame.getBoundingClientRect();
+    if (rect.width > 60 && rect.height > 60) return true;
+  }
+
   const html = doc.body.innerHTML || "";
-  return isChallengeHtml(html);
+  return isChallengeHtml(html) && !hasListPageContent(doc);
 }
 
 function markCaptchaMode() {
   window.__infoboxCaptchaMode = true;
 }
 
-function captchaLooksResolved() {
-  if (isChallengeDocument(document)) return false;
-  return hasListPageContent(document) || !isChallengeHtml(document.documentElement?.outerHTML || "");
+function clearCaptchaMode() {
+  window.__infoboxCaptchaMode = false;
+}
+
+async function probeUrlAccessible(url) {
+  const target = (url || location.href).replace(/#.*$/, "");
+  try {
+    const res = await fetch(target, {
+      credentials: "include",
+      cache: "no-store",
+      headers: { Accept: "text/html,application/xhtml+xml" },
+    });
+    if (res.status === 403 || res.status === 429 || !res.ok) return false;
+    const html = await res.text();
+    if (isChallengeHtml(html) || isLoginHtml(html)) return false;
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    return hasListPageContent(doc) || personHrefMatch(target) || !isChallengeHtml(html);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function captchaLooksResolved(pageUrl) {
+  const probeUrl = pageUrl || location.href;
+  if (!isActiveChallengeDocument(document) && hasListPageContent(document)) return true;
+  return probeUrlAccessible(probeUrl);
 }
 
 function promptCaptchaResolved(message, pageUrl) {
   return new Promise((resolve) => {
     let done = false;
+    let pollTimer = null;
+    let pollBusy = false;
+
     const finish = () => {
       if (done) return;
       done = true;
-      clearInterval(pollTimer);
+      if (pollTimer) clearInterval(pollTimer);
+      clearCaptchaMode();
       resolve();
+    };
+
+    const tryContinue = async (fromButton) => {
+      const sub = document.getElementById("infobox-progress-sub");
+      if (sub && fromButton) sub.textContent = "Vérification BoxRec en cours…";
+      const ok = await captchaLooksResolved(pageUrl);
+      if (ok) {
+        if (sub) sub.textContent = "reCAPTCHA validé — reprise de la collecte…";
+        setTimeout(finish, 400);
+        return true;
+      }
+      if (sub && fromButton) {
+        sub.textContent =
+          (message || "Résolvez la vérification sur BoxRec.") +
+          "\n\nLe reCAPTCHA n’est pas encore détecté comme résolu. " +
+          "Validez-le dans cet onglet (recommandé) ou attendez quelques secondes.";
+      }
+      return false;
     };
 
     infoboxProgressShow(
       "reCAPTCHA BoxRec",
       (message || "Résolvez la vérification sur BoxRec, puis continuez.") +
-        "\n\nQuand c’est fait : cliquez « Continuer » ci-dessous (détection auto si la liste réapparaît).",
-      { showStop: true }
+        "\n\nAstuce : résolvez le reCAPTCHA dans cet onglet si possible. " +
+        "Sinon, validez dans l’autre onglet puis cliquez « Continuer » (vérification réseau).",
+      { showStop: false, preserveActions: true }
     );
     const actions = document.getElementById("infobox-progress-actions");
     if (!actions) {
@@ -447,9 +521,31 @@ function promptCaptchaResolved(message, pageUrl) {
     cont.textContent = "J’ai résolu — Continuer";
     cont.style.cssText =
       "cursor:pointer;display:block;width:100%;margin-bottom:0.5rem;padding:0.65rem 1rem;font-size:1rem;font-weight:700;border:0;background:#2563eb;color:#fff;border-radius:8px";
-    cont.addEventListener("click", finish);
+    cont.addEventListener("click", async () => {
+      cont.disabled = true;
+      const ok = await tryContinue(true);
+      if (!ok) {
+        cont.disabled = false;
+      }
+    });
     actions.appendChild(cont);
-    if (pageUrl) {
+
+    const reload = document.createElement("button");
+    reload.type = "button";
+    reload.textContent = "Recharger cette page BoxRec";
+    reload.style.cssText =
+      "cursor:pointer;display:block;width:100%;margin-bottom:0.5rem;padding:0.55rem 1rem;font-size:0.9rem;font-weight:600;border:2px solid #16a34a;background:#fff;color:#15803d;border-radius:8px";
+    reload.addEventListener("click", () => {
+      try {
+        sessionStorage.setItem("infobox_resume_after_reload", "1");
+      } catch (_) {
+        /* ignore */
+      }
+      location.reload();
+    });
+    actions.appendChild(reload);
+
+    if (pageUrl && pageUrl.replace(/#.*$/, "") !== location.href.replace(/#.*$/, "")) {
       const open = document.createElement("button");
       open.type = "button";
       open.textContent = "Ouvrir la page bloquée (nouvel onglet)";
@@ -460,6 +556,7 @@ function promptCaptchaResolved(message, pageUrl) {
       });
       actions.appendChild(open);
     }
+
     const stop = document.createElement("button");
     stop.type = "button";
     stop.textContent = "Arrêter la collecte";
@@ -471,17 +568,26 @@ function promptCaptchaResolved(message, pageUrl) {
     });
     actions.appendChild(stop);
 
-    const pollTimer = setInterval(() => {
-      if (infoboxCancelled()) {
-        finish();
-        return;
-      }
-      if (captchaLooksResolved()) {
-        const sub = document.getElementById("infobox-progress-sub");
-        if (sub) sub.textContent = "reCAPTCHA validé — reprise de la collecte…";
-        setTimeout(finish, 600);
-      }
-    }, 1500);
+    pollTimer = setInterval(() => {
+      if (done || pollBusy) return;
+      pollBusy = true;
+      (async () => {
+        try {
+          if (infoboxCancelled()) {
+            finish();
+            return;
+          }
+          const ok = await captchaLooksResolved(pageUrl);
+          if (ok) {
+            const sub = document.getElementById("infobox-progress-sub");
+            if (sub) sub.textContent = "reCAPTCHA validé — reprise de la collecte…";
+            setTimeout(finish, 400);
+          }
+        } finally {
+          pollBusy = false;
+        }
+      })();
+    }, 2000);
   });
 }
 
@@ -518,7 +624,6 @@ function extractContactsFromHtml(html, person) {
 }
 
 async function fetchProfileHtml(url) {
-  if (window.__infoboxCaptchaMode) return null;
   const opts = {
     credentials: "include",
     cache: "no-store",
@@ -538,7 +643,7 @@ async function fetchProfileHtml(url) {
           "BoxRec limite les requêtes. Résolvez le reCAPTCHA si affiché.",
           url
         );
-        return null;
+        continue;
       }
       if (!res.ok) {
         await new Promise((r) => setTimeout(r, PROFILE_RETRY_DELAY_MS));
@@ -551,7 +656,7 @@ async function fetchProfileHtml(url) {
           "reCAPTCHA détecté sur une fiche profil. Résolvez-le sur BoxRec.",
           url
         );
-        return null;
+        continue;
       }
       if (isLoginHtml(html) && attempt < 4) {
         await new Promise((r) => setTimeout(r, PROFILE_RETRY_DELAY_MS));
@@ -780,26 +885,31 @@ function hasListPageContent(doc) {
 }
 
 async function waitForListContent(doc, maxMs = 10000) {
-  if (isChallengeDocument(doc)) {
+  if (isActiveChallengeDocument(document)) {
     markCaptchaMode();
     await promptCaptchaResolved(
-      "BoxRec affiche une vérification (reCAPTCHA). Complétez-la sur cette page."
+      "BoxRec affiche une vérification (reCAPTCHA). Complétez-la sur cette page.",
+      location.href
     );
     await new Promise((r) => setTimeout(r, 600));
   }
   const step = 350;
   for (let elapsed = 0; elapsed < maxMs; elapsed += step) {
-    if (isChallengeDocument(doc)) {
+    const live = document;
+    if (isActiveChallengeDocument(live)) {
       markCaptchaMode();
-      await promptCaptchaResolved("La liste n’apparaît pas tant que le reCAPTCHA n’est pas résolu.");
+      await promptCaptchaResolved(
+        "La liste n’apparaît pas tant que le reCAPTCHA n’est pas résolu.",
+        location.href
+      );
       elapsed = 0;
       continue;
     }
-    if (hasListPageContent(doc)) return true;
-    if (extractListFromDoc(doc, "manager", "").length > 0) return true;
+    if (hasListPageContent(live)) return true;
+    if (extractListFromDoc(live, "manager", "").length > 0) return true;
     await new Promise((r) => setTimeout(r, step));
   }
-  return hasListPageContent(doc) && !isChallengeDocument(doc);
+  return hasListPageContent(document) && !isActiveChallengeDocument(document);
 }
 
 function extractRowLocation(tds, headers, linkTd) {
@@ -1087,7 +1197,7 @@ async function fetchPageDoc(url) {
     url.replace(/#.*$/, "") === location.href.replace(/#.*$/, "") &&
     getOffsetFromUrl(url) === getOffsetFromUrl(location.href);
   if (same) {
-    if (isChallengeDocument(document)) {
+    if (isActiveChallengeDocument(document)) {
       markCaptchaMode();
       await promptCaptchaResolved("reCAPTCHA sur la page actuelle — résolvez-le puis continuez.", url);
     }
@@ -1108,7 +1218,7 @@ async function fetchPageDoc(url) {
         const sameAfter =
           url.replace(/#.*$/, "") === location.href.replace(/#.*$/, "") &&
           getOffsetFromUrl(url) === getOffsetFromUrl(location.href);
-        if (sameAfter && captchaLooksResolved()) return document;
+        if (sameAfter && (await captchaLooksResolved(url))) return document;
         continue;
       }
       if (!res.ok) return null;
@@ -1554,7 +1664,7 @@ async function infoboxExtractFromPageCore() {
   const role = getRoleFromUrl(location.href);
   let searchCountry = getSearchCountryFromUrl(location.href) || getSearchCountryFromPage(document);
 
-  infoboxProgressShow("InfoBox v3.6", "Détection de la liste BoxRec…", { showStop: false });
+  infoboxProgressShow("InfoBox v3.7", "Détection de la liste BoxRec…", { showStop: false });
   const listReady = await waitForListContent(document);
   if (!listReady) {
     infoboxProgressHide(0);

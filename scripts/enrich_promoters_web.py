@@ -72,9 +72,35 @@ def normalize_name(value: str) -> str:
     return "".join(c for c in text if not unicodedata.combining(c))
 
 
-def normalize_phone(value: str) -> str:
+def normalize_phone_digits(value: str) -> str:
     digits = re.sub(r"\D", "", value or "")
-    return digits if len(digits) >= 7 else ""
+    if digits.startswith("00"):
+        digits = digits[2:]
+    return digits
+
+
+def fix_doubled_phone(digits: str) -> str | None:
+    if len(digits) < 16 or len(digits) % 2 != 0:
+        return None
+    half = len(digits) // 2
+    if digits[:half] == digits[half:]:
+        return digits[:half]
+    return None
+
+
+def validate_phone_digits(digits: str) -> str | None:
+    if not digits:
+        return None
+    fixed = fix_doubled_phone(digits)
+    if fixed:
+        digits = fixed
+    if 8 <= len(digits) <= 15:
+        return digits
+    return None
+
+
+def normalize_phone(value: str) -> str:
+    return validate_phone_digits(normalize_phone_digits(value)) or ""
 
 
 def has_contact(row: dict[str, str]) -> bool:
@@ -179,7 +205,11 @@ def person_from_row(row: dict[str, str]) -> dict[str, Any]:
 
 def result_from_person(row: dict[str, str], person: dict[str, Any]) -> dict[str, str]:
     email = (person.get("email") or row.get("email") or "").strip()
-    phone = (person.get("phone") or row.get("telephone") or "").strip()
+    phone_raw = (person.get("phone") or row.get("telephone") or "").strip()
+    phone = validate_phone_digits(normalize_phone_digits(phone_raw)) or ""
+    if phone_raw and not phone:
+        person.pop("phone", None)
+        person.pop("phone_source", None)
     return {
         "nom": row["nom"],
         "email": email,

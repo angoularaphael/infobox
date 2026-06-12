@@ -258,9 +258,16 @@ def main() -> int:
         return 1
 
     promoteurs_map = load_all_promoteurs()
-    promoteurs = list(promoteurs_map.values())
-    with_contact = sum(1 for p in promoteurs if p["has_email"] or p["has_phone"])
-    print(f"Promoteurs à synchroniser: {len(promoteurs)} (avec contact: {with_contact})")
+    all_promoteurs = list(promoteurs_map.values())
+    promoteurs = [p for p in all_promoteurs if p["has_email"] or p["has_phone"]]
+    skipped = len(all_promoteurs) - len(promoteurs)
+    print(
+        f"Promoteurs à synchroniser: {len(promoteurs)} "
+        f"(sans contact ignorés: {skipped}, total CSV: {len(all_promoteurs)})"
+    )
+    if not promoteurs:
+        print("Aucun promoteur avec e-mail ou téléphone à synchroniser.")
+        return 1
 
     session = make_session()
     try:

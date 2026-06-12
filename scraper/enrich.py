@@ -58,20 +58,47 @@ ROLE_QUERIES: dict[str, list[str]] = {
 }
 
 
-def _pick_email(text: str) -> str:
+def _significant_name_parts(name: str) -> list[str]:
+    skip = {"the", "van", "von", "de", "la", "el", "bin", "ben", "jr", "sr", "ii", "iii"}
+    parts = [p for p in re.split(r"[\s\-']+", (name or "").strip()) if len(p) >= 3]
+    return [p.lower() for p in parts if p.lower() not in skip]
+
+
+def _contact_near_name(name: str, text: str, start: int, end: int) -> bool:
+    parts = _significant_name_parts(name)
+    if not parts:
+        return False
+    window = text[max(0, start - 320) : min(len(text), end + 320)].lower()
+    return any(part in window for part in parts)
+
+
+def _pick_email(text: str, *, name: str = "") -> str:
     for m in EMAIL_RE.finditer(text):
         e = m.group(0).lower()
-        if not any(d in e for d in SKIP_EMAIL_DOMAINS):
-            return m.group(0)
+        if any(d in e for d in SKIP_EMAIL_DOMAINS):
+            continue
+        if name and not _contact_near_name(name, text, m.start(), m.end()):
+            continue
+        return m.group(0)
     return ""
 
 
-def _pick_phone(text: str) -> str:
+def _pick_phone(text: str, *, name: str = "") -> str:
     for m in PHONE_RE.finditer(text):
         p = m.group(0).strip()
         digits = re.sub(r"\D", "", p)
-        if 9 <= len(digits) <= 15:
-            return p
+        if digits.startswith("00"):
+            digits = digits[2:]
+        # Ex. numéro collé deux fois dans le texte scrapé
+        if len(digits) >= 16 and len(digits) % 2 == 0:
+            half = len(digits) // 2
+            if digits[:half] == digits[half:]:
+                digits = digits[:half]
+        if not (8 <= len(digits) <= 15):
+            continue
+        if name and not _contact_near_name(name, text, m.start(), m.end()):
+            continue
+        return digits
     return ""
 
 
@@ -173,6 +200,7 @@ def enrich_person(
     if not queries:
         return person
 
+    person_name = (person.get("name") or "").strip()
     blob_parts: list[str] = []
     urls_to_fetch: list[str] = []
 
@@ -184,12 +212,12 @@ def enrich_person(
                 urls_to_fetch.append(href)
 
         if not person.get("email"):
-            email = _pick_email("\n".join(blob_parts))
+            email = _pick_email("\n".join(blob_parts), name=person_name)
             if email:
                 person["email"] = email
                 person["email_source"] = "web_search"
         if not person.get("phone"):
-            phone = _pick_phone("\n".join(blob_parts))
+            phone = _pick_phone("\n".join(blob_parts), name=person_name)
             if phone:
                 person["phone"] = phone
                 person["phone_source"] = "web_search"
@@ -213,12 +241,12 @@ def enrich_person(
 
             blob_parts.append(page_text)
             if not person.get("email"):
-                email = _pick_email(page_text)
+                email = _pick_email(page_text, name=person_name)
                 if email:
                     person["email"] = email
                     person["email_source"] = url[:200]
             if not person.get("phone"):
-                phone = _pick_phone(page_text)
+                phone = _pick_phone(page_text, name=person_name)
                 if phone:
                     person["phone"] = phone
                     person["phone_source"] = url[:200]
