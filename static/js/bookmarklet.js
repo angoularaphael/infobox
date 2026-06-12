@@ -1,6 +1,6 @@
 /**
  * Favori InfoBox — boxrec.com (utilisateur connecté).
- * v3.7 — reCAPTCHA : détection réseau + badge ignoré après validation
+ * v3.8 — reCAPTCHA : masquer overlay, boutons visibles, faux positifs corrigés
  */
 const EMAIL_LABELS = ["email", "e-mail", "courriel", "mail"];
 const PHONE_LABELS = [
@@ -343,12 +343,12 @@ function infoboxProgressShow(msg, sub, options) {
     root = document.createElement("div");
     root.id = "infobox-progress";
     root.innerHTML =
-      '<div class="infobox-overlay" style="position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,0.78);display:flex;align-items:center;justify-content:center;padding:1rem;font-family:Segoe UI,system-ui,sans-serif">' +
-      '<div style="background:#fff;padding:1.75rem 2rem;border-radius:12px;max-width:28rem;width:100%;text-align:center;border:2px solid #2563eb;box-shadow:0 16px 48px rgba(37,99,235,0.25)">' +
-      '<div style="font-size:1.25rem;font-weight:700;color:#1d4ed8;margin-bottom:0.75rem">InfoBox</div>' +
-      '<div id="infobox-progress-msg" style="font-size:1rem;color:#1c1917;font-weight:600"></div>' +
-      '<div id="infobox-progress-sub" style="font-size:0.9rem;color:#57534e;margin-top:0.65rem;line-height:1.45"></div>' +
-      '<div id="infobox-progress-actions" style="margin-top:1.25rem"></div>' +
+      '<div id="infobox-progress-overlay" class="infobox-overlay" style="position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,0.78);display:flex;align-items:center;justify-content:center;padding:0.75rem;font-family:Segoe UI,system-ui,sans-serif">' +
+      '<div id="infobox-progress-card" style="background:#fff;padding:1.25rem 1.5rem;border-radius:12px;max-width:24rem;width:100%;text-align:center;border:2px solid #2563eb;box-shadow:0 16px 48px rgba(37,99,235,0.25);display:flex;flex-direction:column;max-height:min(92vh,560px)">' +
+      '<div style="font-size:1.2rem;font-weight:700;color:#1d4ed8;margin-bottom:0.5rem;flex-shrink:0">InfoBox</div>' +
+      '<div id="infobox-progress-msg" style="font-size:0.98rem;color:#1c1917;font-weight:600;flex-shrink:0"></div>' +
+      '<div id="infobox-progress-actions" style="margin-top:0.85rem;flex-shrink:0"></div>' +
+      '<div id="infobox-progress-sub" style="font-size:0.85rem;color:#57534e;margin-top:0.65rem;line-height:1.4;text-align:left;overflow-y:auto;flex:1;min-height:0"></div>' +
       "</div></div>";
     document.body.appendChild(root);
     m = document.getElementById("infobox-progress-msg");
@@ -385,7 +385,52 @@ function infoboxProgressHide(delayMs) {
   setTimeout(() => {
     const el = document.getElementById("infobox-progress");
     if (el) el.remove();
+    const floater = document.getElementById("infobox-captcha-float");
+    if (floater) floater.remove();
   }, delayMs || 0);
+}
+
+function infoboxCaptchaMinimize(handlers) {
+  const overlay = document.getElementById("infobox-progress-overlay");
+  if (overlay) overlay.style.display = "none";
+  let floater = document.getElementById("infobox-captcha-float");
+  if (!floater) {
+    floater = document.createElement("div");
+    floater.id = "infobox-captcha-float";
+    floater.style.cssText =
+      "position:fixed;bottom:14px;right:14px;z-index:2147483647;background:#fff;border:2px solid #2563eb;border-radius:10px;padding:0.75rem 0.85rem;max-width:16rem;box-shadow:0 8px 28px rgba(37,99,235,0.35);font-family:Segoe UI,system-ui,sans-serif;font-size:0.85rem";
+    document.body.appendChild(floater);
+  }
+  floater.innerHTML =
+    '<div style="font-weight:700;color:#1d4ed8;margin-bottom:0.35rem">InfoBox — captcha</div>' +
+    '<div style="color:#57534e;margin-bottom:0.55rem;line-height:1.35">Résolvez le reCAPTCHA sur BoxRec, puis continuez.</div>';
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;flex-wrap:wrap;gap:0.4rem";
+  const cont = document.createElement("button");
+  cont.type = "button";
+  cont.textContent = "Continuer";
+  cont.style.cssText =
+    "cursor:pointer;padding:0.4rem 0.65rem;font-size:0.82rem;font-weight:700;border:0;background:#2563eb;color:#fff;border-radius:6px";
+  cont.addEventListener("click", () => handlers?.onContinue?.());
+  row.appendChild(cont);
+  const show = document.createElement("button");
+  show.type = "button";
+  show.textContent = "Afficher";
+  show.style.cssText =
+    "cursor:pointer;padding:0.4rem 0.65rem;font-size:0.82rem;font-weight:600;border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:6px";
+  show.addEventListener("click", () => {
+    if (overlay) overlay.style.display = "flex";
+    floater.remove();
+  });
+  row.appendChild(show);
+  floater.appendChild(row);
+}
+
+function infoboxCaptchaRestorePanel() {
+  const floater = document.getElementById("infobox-captcha-float");
+  if (floater) floater.remove();
+  const overlay = document.getElementById("infobox-progress-overlay");
+  if (overlay) overlay.style.display = "flex";
 }
 
 function isLoginHtml(html) {
@@ -402,6 +447,34 @@ function isChallengeHtml(html) {
   if (!html || html.length < 80) return false;
   if (isLoginHtml(html)) return false;
   return CHALLENGE_HTML_RE.test(html);
+}
+
+/** Vraie page bloquée (pas une liste/profil BoxRec normale qui contient g-recaptcha). */
+function isBlockedFetchHtml(html, url) {
+  if (!html || html.length < 80) return true;
+  if (isLoginHtml(html)) return true;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  if (hasListPageContent(doc)) return false;
+  if (findProfileSections(doc).length > 0) return false;
+  if (countProfileLinks(doc) > 0) return false;
+  return isChallengeHtml(html);
+}
+
+function captchaProbeUrls(pageUrl) {
+  const urls = [];
+  const add = (u) => {
+    if (!u) return;
+    const clean = String(u).replace(/#.*$/, "");
+    if (clean && !urls.includes(clean)) urls.push(clean);
+  };
+  add(pageUrl);
+  add(location.href);
+  try {
+    add(listBaseUrlFromPage());
+  } catch (_) {
+    /* ignore */
+  }
+  return urls;
 }
 
 function isChallengeDocument(doc) {
@@ -457,18 +530,18 @@ async function probeUrlAccessible(url) {
     });
     if (res.status === 403 || res.status === 429 || !res.ok) return false;
     const html = await res.text();
-    if (isChallengeHtml(html) || isLoginHtml(html)) return false;
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    return hasListPageContent(doc) || personHrefMatch(target) || !isChallengeHtml(html);
+    return !isBlockedFetchHtml(html, target);
   } catch (_) {
     return false;
   }
 }
 
 async function captchaLooksResolved(pageUrl) {
-  const probeUrl = pageUrl || location.href;
   if (!isActiveChallengeDocument(document) && hasListPageContent(document)) return true;
-  return probeUrlAccessible(probeUrl);
+  for (const url of captchaProbeUrls(pageUrl)) {
+    if (await probeUrlAccessible(url)) return true;
+  }
+  return false;
 }
 
 function promptCaptchaResolved(message, pageUrl) {
@@ -490,32 +563,49 @@ function promptCaptchaResolved(message, pageUrl) {
       if (sub && fromButton) sub.textContent = "Vérification BoxRec en cours…";
       const ok = await captchaLooksResolved(pageUrl);
       if (ok) {
+        infoboxCaptchaRestorePanel();
         if (sub) sub.textContent = "reCAPTCHA validé — reprise de la collecte…";
         setTimeout(finish, 400);
         return true;
       }
       if (sub && fromButton) {
         sub.textContent =
-          (message || "Résolvez la vérification sur BoxRec.") +
-          "\n\nLe reCAPTCHA n’est pas encore détecté comme résolu. " +
-          "Validez-le dans cet onglet (recommandé) ou attendez quelques secondes.";
+          "Pas encore détecté. Résolvez le captcha puis réessayez, ou ouvrez la même URL dans un autre onglet.";
       }
       return false;
     };
 
     infoboxProgressShow(
       "reCAPTCHA BoxRec",
-      (message || "Résolvez la vérification sur BoxRec, puis continuez.") +
-        "\n\nAstuce : résolvez le reCAPTCHA dans cet onglet si possible. " +
-        "Sinon, validez dans l’autre onglet puis cliquez « Continuer » (vérification réseau).",
+      message || "BoxRec demande une vérification anti-robot.",
       { showStop: false, preserveActions: true }
     );
     const actions = document.getElementById("infobox-progress-actions");
+    const sub = document.getElementById("infobox-progress-sub");
+    if (sub) {
+      sub.textContent =
+        "1. Cliquez « Masquer InfoBox » pour accéder à la page.\n" +
+        "2. Résolvez le reCAPTCHA (ici ou dans un autre onglet du même navigateur).\n" +
+        "3. Cliquez « Continuer » — détection automatique toutes les 2 s.";
+    }
     if (!actions) {
       setTimeout(finish, 8000);
       return;
     }
     actions.innerHTML = "";
+
+    const hide = document.createElement("button");
+    hide.type = "button";
+    hide.textContent = "Masquer InfoBox — résoudre le captcha";
+    hide.style.cssText =
+      "cursor:pointer;display:block;width:100%;margin-bottom:0.5rem;padding:0.7rem 1rem;font-size:0.95rem;font-weight:700;border:0;background:#16a34a;color:#fff;border-radius:8px";
+    hide.addEventListener("click", () => {
+      infoboxCaptchaMinimize({
+        onContinue: () => tryContinue(true),
+      });
+    });
+    actions.appendChild(hide);
+
     const cont = document.createElement("button");
     cont.type = "button";
     cont.textContent = "J’ai résolu — Continuer";
@@ -579,8 +669,9 @@ function promptCaptchaResolved(message, pageUrl) {
           }
           const ok = await captchaLooksResolved(pageUrl);
           if (ok) {
-            const sub = document.getElementById("infobox-progress-sub");
-            if (sub) sub.textContent = "reCAPTCHA validé — reprise de la collecte…";
+            infoboxCaptchaRestorePanel();
+            const subEl = document.getElementById("infobox-progress-sub");
+            if (subEl) subEl.textContent = "reCAPTCHA validé — reprise de la collecte…";
             setTimeout(finish, 400);
           }
         } finally {
@@ -588,6 +679,14 @@ function promptCaptchaResolved(message, pageUrl) {
         }
       })();
     }, 2000);
+
+    setTimeout(() => {
+      if (done) return;
+      const overlay = document.getElementById("infobox-progress-overlay");
+      if (overlay && overlay.style.display !== "none") {
+        infoboxCaptchaMinimize({ onContinue: () => tryContinue(true) });
+      }
+    }, 1500);
   });
 }
 
@@ -650,7 +749,7 @@ async function fetchProfileHtml(url) {
         continue;
       }
       const html = await res.text();
-      if (isChallengeHtml(html)) {
+      if (isBlockedFetchHtml(html, url)) {
         markCaptchaMode();
         await promptCaptchaResolved(
           "reCAPTCHA détecté sur une fiche profil. Résolvez-le sur BoxRec.",
@@ -1223,7 +1322,7 @@ async function fetchPageDoc(url) {
       }
       if (!res.ok) return null;
       const html = await res.text();
-      if (isChallengeHtml(html)) {
+      if (isBlockedFetchHtml(html, url)) {
         markCaptchaMode();
         await promptCaptchaResolved(
           "reCAPTCHA sur une page liste. Ouvrez-la dans cet onglet et validez.",
@@ -1364,9 +1463,9 @@ async function requestLocationPicker(props, updated, refererUrl) {
   }
   if (!res.ok) throw new Error(`LocationPicker HTTP ${res.status}`);
   const html = await res.text();
-  if (isChallengeHtml(html)) {
+  if (isBlockedFetchHtml(html, location.href)) {
     markCaptchaMode();
-    await promptCaptchaResolved("reCAPTCHA lors du chargement des pays BoxRec.");
+    await promptCaptchaResolved("reCAPTCHA lors du chargement des pays BoxRec.", location.href);
     throw new Error("captcha");
   }
   return html;
@@ -1664,7 +1763,7 @@ async function infoboxExtractFromPageCore() {
   const role = getRoleFromUrl(location.href);
   let searchCountry = getSearchCountryFromUrl(location.href) || getSearchCountryFromPage(document);
 
-  infoboxProgressShow("InfoBox v3.7", "Détection de la liste BoxRec…", { showStop: false });
+  infoboxProgressShow("InfoBox v3.8", "Détection de la liste BoxRec…", { showStop: false });
   const listReady = await waitForListContent(document);
   if (!listReady) {
     infoboxProgressHide(0);

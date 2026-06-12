@@ -34,7 +34,7 @@ from infobox.security import register_security
 load_dotenv()
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-INFOBOX_VERSION = "3.7"
+INFOBOX_VERSION = "3.8"
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
 register_security(app)
