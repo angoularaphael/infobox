@@ -1429,7 +1429,7 @@ async function collectAllListPagesForBase(base, role, searchCountry, seedDoc) {
       const doc = await fetchPageDoc(urlWithOffset(base, off));
       if (!doc) continue;
       extractListFromDoc(doc, role, searchCountry).forEach((p) => byProfile.set(p.profile_url, p));
-      if (!(await waitCancellable(900))) break;
+      if (!(await waitCancellable(listPageDelayMs()))) break;
     }
   }
 
