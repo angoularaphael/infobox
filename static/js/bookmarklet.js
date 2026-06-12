@@ -1,6 +1,6 @@
 /**
  * Favori InfoBox — boxrec.com (utilisateur connecté).
- * v3.8 — reCAPTCHA : masquer overlay, boutons visibles, faux positifs corrigés
+ * v3.9 — erreur BoxRec TSB1, pauses anti-limite, captcha masquable
  */
 const EMAIL_LABELS = ["email", "e-mail", "courriel", "mail"];
 const PHONE_LABELS = [
@@ -19,6 +19,20 @@ const ADDRESS_LABELS = ["residence", "company", "address", "adresse", "résidenc
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
 const PROFILE_FETCH_DELAY_MS = 1100;
 const PROFILE_RETRY_DELAY_MS = 1800;
+const LIST_PAGE_DELAY_MS = 900;
+const BOXREC_ERROR_RE = /something went wrong|return to the homepage|\bTSB\d+\b/i;
+
+function listPageDelayMs() {
+  return window.__infoboxThrottle ? 2800 : LIST_PAGE_DELAY_MS;
+}
+
+function profileFetchDelayMs() {
+  return window.__infoboxThrottle ? 2200 : PROFILE_FETCH_DELAY_MS;
+}
+
+function markBoxRecThrottle() {
+  window.__infoboxThrottle = true;
+}
 
 /** Décode les e-mails protégés par Cloudflare (data-cfemail sur BoxRec). */
 function decodeCfEmail(hex) {
@@ -449,10 +463,24 @@ function isChallengeHtml(html) {
   return CHALLENGE_HTML_RE.test(html);
 }
 
+function isBoxRecErrorHtml(html) {
+  if (!html || html.length < 40) return false;
+  if (isLoginHtml(html)) return false;
+  return BOXREC_ERROR_RE.test(html);
+}
+
+function isBoxRecErrorDocument(doc) {
+  if (!doc?.body) return false;
+  if (hasListPageContent(doc)) return false;
+  const text = doc.body.innerText || doc.body.textContent || "";
+  return BOXREC_ERROR_RE.test(text);
+}
+
 /** Vraie page bloquée (pas une liste/profil BoxRec normale qui contient g-recaptcha). */
 function isBlockedFetchHtml(html, url) {
   if (!html || html.length < 80) return true;
   if (isLoginHtml(html)) return true;
+  if (isBoxRecErrorHtml(html)) return true;
   const doc = new DOMParser().parseFromString(html, "text/html");
   if (hasListPageContent(doc)) return false;
   if (findProfileSections(doc).length > 0) return false;
@@ -485,6 +513,7 @@ function isChallengeDocument(doc) {
 function isActiveChallengeDocument(doc) {
   if (!doc || !doc.body) return false;
   if (hasListPageContent(doc) && countProfileLinks(doc) >= 2) return false;
+  if (isBoxRecErrorDocument(doc)) return true;
 
   const view = doc.defaultView;
   for (const frame of doc.querySelectorAll('iframe[src*="recaptcha"]')) {
@@ -544,6 +573,13 @@ async function captchaLooksResolved(pageUrl) {
   return false;
 }
 
+async function promptBoxRecBlocked(message, pageUrl) {
+  if (/TSB\d+|something went wrong/i.test(message || "")) {
+    markBoxRecThrottle();
+  }
+  return promptCaptchaResolved(message, pageUrl);
+}
+
 function promptCaptchaResolved(message, pageUrl) {
   return new Promise((resolve) => {
     let done = false;
@@ -583,10 +619,14 @@ function promptCaptchaResolved(message, pageUrl) {
     const actions = document.getElementById("infobox-progress-actions");
     const sub = document.getElementById("infobox-progress-sub");
     if (sub) {
-      sub.textContent =
-        "1. Cliquez « Masquer InfoBox » pour accéder à la page.\n" +
-        "2. Résolvez le reCAPTCHA (ici ou dans un autre onglet du même navigateur).\n" +
-        "3. Cliquez « Continuer » — détection automatique toutes les 2 s.";
+      const isTsb = /TSB\d+|something went wrong/i.test(message || "");
+      sub.textContent = isTsb
+        ? "1. Masquez InfoBox, attendez 2 à 5 minutes.\n" +
+          "2. Sur BoxRec : « Return to the homepage », reconnectez-vous si besoin.\n" +
+          "3. Rouvrez votre liste managers (même pays), puis « Continuer »."
+        : "1. Cliquez « Masquer InfoBox » pour accéder à la page.\n" +
+          "2. Résolvez le reCAPTCHA (ici ou dans un autre onglet du même navigateur).\n" +
+          "3. Cliquez « Continuer » — détection automatique toutes les 2 s.";
     }
     if (!actions) {
       setTimeout(finish, 8000);
@@ -1322,9 +1362,18 @@ async function fetchPageDoc(url) {
       }
       if (!res.ok) return null;
       const html = await res.text();
+      if (isBoxRecErrorHtml(html)) {
+        markCaptchaMode();
+        markBoxRecThrottle();
+        await promptBoxRecBlocked(
+          "BoxRec : Something went wrong (TSB1) — limite anti-bot. Attendez 2 à 5 min puis rouvrez la liste.",
+          url
+        );
+        continue;
+      }
       if (isBlockedFetchHtml(html, url)) {
         markCaptchaMode();
-        await promptCaptchaResolved(
+        await promptBoxRecBlocked(
           "reCAPTCHA sur une page liste. Ouvrez-la dans cet onglet et validez.",
           url
         );
@@ -1369,7 +1418,7 @@ async function collectAllListPagesForBase(base, role, searchCountry, seedDoc) {
         : await fetchPageDoc(urls[i]);
     if (!doc) continue;
     extractListFromDoc(doc, role, searchCountry).forEach((p) => byProfile.set(p.profile_url, p));
-    if (i < urls.length - 1 && !(await waitCancellable(900))) break;
+    if (i < urls.length - 1 && !(await waitCancellable(listPageDelayMs()))) break;
   }
 
   const count = byProfile.size;
@@ -1595,7 +1644,7 @@ async function enrichAllProfiles(people) {
       );
       document.title = `InfoBox ${i + 1}/${people.length}`;
       await enrichOneProfile(p, { useIframe: useIframe || captchaMode });
-      if (i < people.length - 1 && !(await waitCancellable(PROFILE_FETCH_DELAY_MS))) break;
+      if (i < people.length - 1 && !(await waitCancellable(profileFetchDelayMs()))) break;
     }
   }
 
@@ -1763,13 +1812,22 @@ async function infoboxExtractFromPageCore() {
   const role = getRoleFromUrl(location.href);
   let searchCountry = getSearchCountryFromUrl(location.href) || getSearchCountryFromPage(document);
 
-  infoboxProgressShow("InfoBox v3.8", "Détection de la liste BoxRec…", { showStop: false });
+  infoboxProgressShow("InfoBox v3.9", "Détection de la liste BoxRec…", { showStop: false });
+  if (isBoxRecErrorDocument(document)) {
+    markBoxRecThrottle();
+    await promptBoxRecBlocked(
+      "BoxRec affiche « Something went wrong (TSB1) » sur cette page.",
+      location.href
+    );
+  }
   const listReady = await waitForListContent(document);
   if (!listReady) {
     infoboxProgressHide(0);
-    const captchaHint = isChallengeDocument(document)
-      ? "Un reCAPTCHA BoxRec est affiché — résolvez-le puis relancez le favori.\n\n"
-      : "";
+    const captchaHint = isBoxRecErrorDocument(document)
+      ? "BoxRec affiche une erreur TSB1 (trop de requêtes). Attendez quelques minutes, retournez à l’accueil BoxRec, rouvrez la liste, puis relancez le favori.\n\n"
+      : isChallengeDocument(document)
+        ? "Un reCAPTCHA BoxRec est affiché — résolvez-le puis relancez le favori.\n\n"
+        : "";
     alert(
       captchaHint +
         "InfoBox : liste non détectée.\n\n" +
