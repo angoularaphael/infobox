@@ -904,6 +904,46 @@ function personHrefMatch(href) {
   return null;
 }
 
+/** Clé stable pour dédoublonner (même fiche BoxRec malgré www / URL relative). */
+function personProfileKey(href) {
+  const m = personHrefMatch(href || "");
+  if (m) return `${m[1].toLowerCase()}/${m[2]}`;
+  if (!href) return "";
+  try {
+    return new URL(href, "https://boxrec.com").href.replace(/#.*$/, "").replace(/\/$/, "").toLowerCase();
+  } catch (_) {
+    return String(href).trim().toLowerCase();
+  }
+}
+
+function normalizeProfileUrl(href) {
+  const m = personHrefMatch(href || "");
+  if (m) return `https://boxrec.com/en/${m[1].toLowerCase()}/${m[2]}`;
+  if (!href) return "";
+  try {
+    return new URL(href, "https://boxrec.com").href.replace(/#.*$/, "").replace(/\/$/, "");
+  } catch (_) {
+    return String(href).trim();
+  }
+}
+
+function mergePersonIntoMap(map, person) {
+  const key = personProfileKey(person.profile_url) || (person.name || "").trim().toLowerCase();
+  if (!key) return;
+  const prev = map.get(key);
+  if (!prev) {
+    map.set(key, person);
+    return;
+  }
+  if (!prev.search_country && person.search_country) prev.search_country = person.search_country;
+}
+
+function dedupePeopleByProfile(people) {
+  const byKey = new Map();
+  people.forEach((p) => mergePersonIntoMap(byKey, p));
+  return [...byKey.values()];
+}
+
 const ROLE_SPORT_LABELS = {
   "2_0": "manager",
   "3_0": "matchmaker",
@@ -991,13 +1031,16 @@ function extractFromHumanContainers(doc, role, searchCountry) {
     if ([...row.classList].some((c) => c.startsWith("border-b-2"))) return;
     const link = findRowProfileLink(row);
     if (!link) return;
-    const href = link.href || link.getAttribute("href");
-    const full = href.startsWith("http") ? href : new URL(href, "https://boxrec.com").href;
-    if (seen.has(full)) return;
-    seen.add(full);
+    const href = link.href || link.getAttribute("href") || "";
+    const profile_url = normalizeProfileUrl(href);
+    const key = personProfileKey(profile_url);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const match = personHrefMatch(href);
     people.push({
       name: link.textContent.trim(),
-      profile_url: full,
+      profile_url,
+      id: match ? match[2] : "",
       location: humanRowLocation(row),
       search_country: searchCountry || "",
       address: humanRowCompany(row),
@@ -1098,10 +1141,12 @@ function extractListFromTable(doc, role, searchCountry) {
     if (tr.querySelector("th") && tr !== headerRow) return;
     const link = findRowProfileLink(tr);
     if (!link) return;
-    const href = link.href || link.getAttribute("href");
-    const full = href.startsWith("http") ? href : new URL(href, "https://boxrec.com").href;
-    if (seen.has(full)) return;
-    seen.add(full);
+    const href = link.href || link.getAttribute("href") || "";
+    const profile_url = normalizeProfileUrl(href);
+    const key = personProfileKey(profile_url);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const match = personHrefMatch(href);
     const tds = [...tr.querySelectorAll("td")];
     const linkTd = link.closest("td");
     const location = extractRowLocation(tds, headers, linkTd);
@@ -1116,7 +1161,8 @@ function extractListFromTable(doc, role, searchCountry) {
     if (tel) phone = tel.getAttribute("href").replace(/^tel:/i, "").trim();
     people.push({
       name: link.textContent.trim(),
-      profile_url: full,
+      profile_url,
+      id: match ? match[2] : "",
       location,
       search_country: searchCountry || "",
       address: company,
@@ -1422,7 +1468,7 @@ async function collectAllListPagesForBase(base, role, searchCountry, seedDoc) {
         ? firstDoc
         : await fetchPageDoc(urls[i]);
     if (!doc) continue;
-    extractListFromDoc(doc, role, searchCountry).forEach((p) => byProfile.set(p.profile_url, p));
+    extractListFromDoc(doc, role, searchCountry).forEach((p) => mergePersonIntoMap(byProfile, p));
     if (i < urls.length - 1 && !(await waitCancellable(listPageDelayMs()))) break;
   }
 
@@ -1433,7 +1479,7 @@ async function collectAllListPagesForBase(base, role, searchCountry, seedDoc) {
       if (infoboxCancelled()) break;
       const doc = await fetchPageDoc(urlWithOffset(base, off));
       if (!doc) continue;
-      extractListFromDoc(doc, role, searchCountry).forEach((p) => byProfile.set(p.profile_url, p));
+      extractListFromDoc(doc, role, searchCountry).forEach((p) => mergePersonIntoMap(byProfile, p));
       if (!(await waitCancellable(listPageDelayMs()))) break;
     }
   }
@@ -1625,7 +1671,7 @@ async function collectWorldwideListPages(role, templateUrl, startCountry) {
     const batch = await collectAllListPagesForBase(base, role, country.label);
     batch.forEach((p) => {
       if (!p.search_country) p.search_country = country.label;
-      byProfile.set(p.profile_url, p);
+      mergePersonIntoMap(byProfile, p);
     });
     if (ci < countries.length - 1 && !(await waitCancellable(1100))) break;
   }
@@ -1906,6 +1952,8 @@ async function infoboxExtractFromPageCore() {
     alert("Aucun contact trouvé.");
     return;
   }
+
+  people = dedupePeopleByProfile(people);
 
   infoboxProgressShow(
     `${people.length} contacts trouvés`,
