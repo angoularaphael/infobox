@@ -235,9 +235,19 @@ def load_checkpoint() -> dict[str, dict[str, str]]:
         return {}
 
 
-def save_checkpoint(results: list[dict[str, str]]) -> None:
+def save_checkpoint(
+    results: list[dict[str, str]],
+    *,
+    existing: dict[str, dict[str, str]] | None = None,
+) -> None:
+    merged = dict(existing or {})
+    for row in results:
+        merged[normalize_name(row["nom"])] = row
     FUTUREBD.mkdir(parents=True, exist_ok=True)
-    CHECKPOINT.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+    CHECKPOINT.write_text(
+        json.dumps(list(merged.values()), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def write_results_csv(results: list[dict[str, str]], path: Path) -> None:
@@ -286,7 +296,8 @@ def enrich_rows(
         enrich_person(person, delay=delay, deep_web=deep_web, max_pages=max_pages)
         result = result_from_person(row, person)
         results.append(result)
-        save_checkpoint(results)
+        save_checkpoint(results, existing=checkpoint)
+        checkpoint[normalize_name(row["nom"])] = result
         if on_progress:
             on_progress(i, total, result)
 
