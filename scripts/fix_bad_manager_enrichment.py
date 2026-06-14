@@ -18,6 +18,9 @@ FUTUREBD = ROOT / "futurebd"
 ENRICHIS_CSV = FUTUREBD / "managers_enrichis.csv"
 CONTACTS_CSV = FUTUREBD / "managers_contacts_sans_doublons.csv"
 
+sys.path.insert(0, str(ROOT / "scripts"))
+from contact_validation import validate_phone  # noqa: E402
+
 
 def normalize_name(value: str) -> str:
     text = unicodedata.normalize("NFKD", (value or "").strip().lower())
@@ -44,34 +47,6 @@ def extract_phone_from_field(value: str) -> str:
         if digits:
             return digits
     return ""
-
-
-def fix_doubled_phone(digits: str) -> str | None:
-    """Ex. 86150046847118615004684711 → 8615004684711"""
-    if len(digits) < 16 or len(digits) % 2 != 0:
-        return None
-    half = len(digits) // 2
-    if digits[:half] == digits[half:]:
-        return digits[:half]
-    return None
-
-
-def validate_phone(digits: str) -> tuple[str | None, str | None]:
-    """Retourne (téléphone valide, erreur). Erreur None = OK."""
-    if not digits:
-        return None, "vide"
-
-    doubled = fix_doubled_phone(digits)
-    if doubled:
-        digits = doubled
-
-    if len(digits) > 15:
-        return None, f"trop_long ({len(digits)})"
-
-    if len(digits) < 8:
-        return None, f"trop_court ({len(digits)})"
-
-    return digits, None
 
 
 def contact_type(has_phone: bool, has_email: bool) -> str:

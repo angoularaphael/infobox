@@ -21,14 +21,8 @@ FUTUREBD = ROOT / "futurebd"
 PROMOTEUR_CSV = FUTUREBD / "promoteur.csv"
 RAW_LIST_CSV = FUTUREBD / "promoteurs_liste_brute.csv"
 
-
-def normalize_email(value: str) -> str:
-    return (value or "").strip().lower()
-
-
-def normalize_phone(value: str) -> str:
-    digits = re.sub(r"\D", "", value or "")
-    return digits if len(digits) >= 7 else ""
+sys.path.insert(0, str(ROOT / "scripts"))
+from contact_validation import normalize_email, normalize_phone_digits, validate_email, validate_phone  # noqa: E402
 
 
 def normalize_name(value: str) -> str:
@@ -77,11 +71,22 @@ def pick(row: dict[str, str], *keys: str) -> str:
     return ""
 
 
+def normalize_phone(value: str) -> str:
+    digits = normalize_phone_digits(value)
+    validated, _err = validate_phone(digits)
+    return validated or ""
+
+
+def normalize_email_field(value: str) -> str:
+    validated, _err = validate_email(value)
+    return validated or ""
+
+
 def row_to_promoteur(row: dict[str, str]) -> dict | None:
     nom = pick(row, "nom", "Nom")
     if not nom:
         return None
-    email = normalize_email(pick(row, "email", "Email"))
+    email = normalize_email_field(pick(row, "email", "Email"))
     telephone = normalize_phone(pick(row, "telephone", "Téléphone", "Telephone", "Tel"))
     adresse = pick(row, "adresse", "Organisation / Adresse", "organisation / adresse")
     localisation = pick(row, "localisation", "Localisation")

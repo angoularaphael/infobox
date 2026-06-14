@@ -32,7 +32,10 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
 
+from contact_validation import normalize_email, normalize_phone_digits, validate_email, validate_phone  # noqa: E402
 from scraper.enrich import enrich_person  # noqa: E402
 
 FUTUREBD = ROOT / "futurebd"
@@ -79,32 +82,19 @@ def normalize_phone_digits(value: str) -> str:
     return digits
 
 
-def fix_doubled_phone(digits: str) -> str | None:
-    if len(digits) < 16 or len(digits) % 2 != 0:
-        return None
-    half = len(digits) // 2
-    if digits[:half] == digits[half:]:
-        return digits[:half]
-    return None
-
-
-def validate_phone_digits(digits: str) -> str | None:
-    if not digits:
-        return None
-    fixed = fix_doubled_phone(digits)
-    if fixed:
-        digits = fixed
-    if 8 <= len(digits) <= 15:
-        return digits
-    return None
-
-
 def normalize_phone(value: str) -> str:
-    return validate_phone_digits(normalize_phone_digits(value)) or ""
+    digits = normalize_phone_digits(value)
+    validated, _err = validate_phone(digits)
+    return validated or ""
+
+
+def normalize_email_field(value: str) -> str:
+    validated, _err = validate_email(value)
+    return validated or ""
 
 
 def has_contact(row: dict[str, str]) -> bool:
-    return bool((row.get("email") or "").strip() or normalize_phone(row.get("telephone", "")))
+    return bool(normalize_email_field(row.get("email", "")) or normalize_phone(row.get("telephone", "")))
 
 
 def read_text_lines(path: Path) -> list[str]:
@@ -204,9 +194,9 @@ def person_from_row(row: dict[str, str]) -> dict[str, Any]:
 
 
 def result_from_person(row: dict[str, str], person: dict[str, Any]) -> dict[str, str]:
-    email = (person.get("email") or row.get("email") or "").strip()
+    email = normalize_email_field(person.get("email") or row.get("email") or "")
     phone_raw = (person.get("phone") or row.get("telephone") or "").strip()
-    phone = validate_phone_digits(normalize_phone_digits(phone_raw)) or ""
+    phone = normalize_phone(phone_raw)
     if phone_raw and not phone:
         person.pop("phone", None)
         person.pop("phone_source", None)

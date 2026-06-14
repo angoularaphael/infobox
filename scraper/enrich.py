@@ -22,6 +22,12 @@ SKIP_EMAIL_DOMAINS = (
     "gstatic.com",
     "facebook.com",
     "instagram.com",
+    "casino",
+    "alexandercasino",
+    "bet365",
+    "poker",
+    "gambling",
+    "bookmaker",
 )
 SKIP_FETCH_HOSTS = (
     "boxrec.com",
@@ -95,6 +101,10 @@ def _pick_phone(text: str, *, name: str = "") -> str:
             if digits[:half] == digits[half:]:
                 digits = digits[:half]
         if not (8 <= len(digits) <= 15):
+            continue
+        if re.match(r"^(19|20)\d{6}$", digits):
+            continue
+        if len(digits) == 13 and digits.startswith(("978", "979")):
             continue
         if name and not _contact_near_name(name, text, m.start(), m.end()):
             continue
