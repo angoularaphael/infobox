@@ -63,8 +63,22 @@ def looks_like_isbn(digits: str) -> bool:
     return False
 
 
+def looks_like_scraped_garbage(digits: str) -> bool:
+    """Faux positifs fréquents du scraping (IDs, dates collées, etc.)."""
+    if len(digits) >= 12 and re.match(r"^20[12]\d", digits):
+        return True
+    if len(digits) >= 12 and len(set(digits)) <= 4:
+        return True
+    if len(digits) >= 11 and digits.startswith(("0" * 4, "1" * 4)):
+        return True
+    return False
+
+
 def validate_phone(digits: str) -> tuple[str | None, str | None]:
-    """Retourne (téléphone valide, erreur). Erreur None = OK."""
+    """Retourne (téléphone valide, erreur). Erreur None = OK.
+
+    Format attendu : international sans + (ex. 33612345678), 10 à 15 chiffres.
+    """
     if not digits:
         return None, "vide"
 
@@ -78,11 +92,17 @@ def validate_phone(digits: str) -> tuple[str | None, str | None]:
     if looks_like_isbn(digits):
         return None, "isbn"
 
+    if looks_like_scraped_garbage(digits):
+        return None, "format_suspect"
+
     if len(digits) > 15:
         return None, f"trop_long ({len(digits)})"
 
-    if len(digits) < 8:
-        return None, f"trop_court ({len(digits)})"
+    min_len = 10
+    if digits.startswith("376"):
+        min_len = 9
+    if len(digits) < min_len:
+        return None, f"trop_court_sans_indicatif ({len(digits)})"
 
     if len(set(digits)) <= 2:
         return None, "chiffres_repetitifs"
